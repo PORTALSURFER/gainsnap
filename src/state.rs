@@ -4,8 +4,12 @@ use crate::params::GainSnapParams;
 
 /// Four-byte GainSnap state marker (`GNSP`).
 pub const STATE_MAGIC: u32 = u32::from_le_bytes(*b"GNSP");
-/// Current state envelope version.
-pub const STATE_VERSION: u32 = 1;
+/// State envelope version written by the toggle matcher.
+pub const STATE_VERSION: u32 = 2;
+/// State envelope version written by the original one-shot matcher.
+pub const LEGACY_STATE_VERSION: u32 = 1;
+/// State envelope versions accepted for loading.
+pub const ACCEPTED_STATE_VERSIONS: &[u32] = &[STATE_VERSION, LEGACY_STATE_VERSION];
 
 /// Fixed state payload size in bytes.
 pub const STATE_PAYLOAD_BYTES: usize = 12;
@@ -15,7 +19,7 @@ pub const STATE_PAYLOAD_BYTES: usize = 12;
 pub struct StateSnapshot {
     /// Selected target peak in dBFS.
     pub target_db: f32,
-    /// Whether the one-shot match request was high when saved.
+    /// Whether match measurement was enabled when saved.
     pub match_requested: bool,
     /// Last calculated gain correction in dB.
     pub locked_gain_db: f32,
@@ -30,8 +34,16 @@ pub fn encode_payload(params: &GainSnapParams) -> [u8; STATE_PAYLOAD_BYTES] {
     payload
 }
 
-/// Decode and validate a fixed-size state payload.
-pub fn decode_payload(payload: &[u8]) -> Option<StateSnapshot> {
+/// Decode and validate a fixed-size state payload for a supported version.
+///
+/// Version one stored a high Match Now value as a one-shot trigger. It must
+/// not reopen a continuous measurement when loaded by the toggle matcher, so
+/// legacy payloads always migrate to Match off while preserving their target
+/// and last locked gain.
+pub fn decode_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
+    if !ACCEPTED_STATE_VERSIONS.contains(&version) {
+        return None;
+    }
     if payload.len() != STATE_PAYLOAD_BYTES || payload[5..8] != [0, 0, 0] {
         return None;
     }
@@ -42,7 +54,7 @@ pub fn decode_payload(payload: &[u8]) -> Option<StateSnapshot> {
     }
     Some(StateSnapshot {
         target_db,
-        match_requested: payload[4] != 0,
+        match_requested: version == STATE_VERSION && payload[4] != 0,
         locked_gain_db,
     })
 }
@@ -68,17 +80,31 @@ mod tests {
         params.set_param(crate::params::PARAM_MATCH, 1.0);
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 5.25);
         let payload = encode_payload(&params);
-        let decoded = decode_payload(&payload).expect("valid state");
+        let decoded = decode_payload(STATE_VERSION, &payload).expect("valid state");
         assert_eq!(decoded.target_db, -7.5);
         assert!(decoded.match_requested);
         assert_eq!(decoded.locked_gain_db, 5.25);
 
-        assert!(decode_payload(&payload[..11]).is_none());
+        assert!(decode_payload(STATE_VERSION, &payload[..11]).is_none());
         let mut invalid = payload;
         invalid[4] = 2;
-        assert!(decode_payload(&invalid).is_none());
+        assert!(decode_payload(STATE_VERSION, &invalid).is_none());
         invalid = payload;
         invalid[5] = 1;
-        assert!(decode_payload(&invalid).is_none());
+        assert!(decode_payload(STATE_VERSION, &invalid).is_none());
+    }
+
+    #[test]
+    fn legacy_state_migrates_match_now_to_off() {
+        let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_TARGET_DB, -7.5);
+        params.set_param(crate::params::PARAM_MATCH, 1.0);
+        params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 5.25);
+        let payload = encode_payload(&params);
+        let decoded = decode_payload(LEGACY_STATE_VERSION, &payload).expect("legacy state");
+
+        assert_eq!(decoded.target_db, -7.5);
+        assert!(!decoded.match_requested);
+        assert_eq!(decoded.locked_gain_db, 5.25);
     }
 }

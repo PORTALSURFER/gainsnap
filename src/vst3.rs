@@ -6,7 +6,8 @@ use toybox::vst3::prelude::Steinberg::*;
 use toybox::vst3::prelude::*;
 
 use crate::state::{
-    apply_snapshot, decode_payload, STATE_MAGIC, STATE_PAYLOAD_BYTES, STATE_VERSION,
+    apply_snapshot, decode_payload, StateSnapshot, ACCEPTED_STATE_VERSIONS, STATE_MAGIC,
+    STATE_PAYLOAD_BYTES, STATE_VERSION,
 };
 
 mod controller;
@@ -36,16 +37,21 @@ unsafe fn write_vst3_state(stream: *mut IBStream, shared: &GainSnapVst3Shared) -
     }
 }
 
+fn decode_vst3_state_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
+    if payload.len() != STATE_PAYLOAD_BYTES {
+        return None;
+    }
+    decode_payload(version, payload)
+}
+
 /// Decode and apply a VST3 state payload only after the full payload validates.
 unsafe fn read_vst3_state(stream: *mut IBStream, shared: &GainSnapVst3Shared) -> tresult {
-    let Ok(versioned) = (unsafe { read_versioned_payload(stream, STATE_MAGIC, &[STATE_VERSION]) })
+    let Ok(versioned) =
+        (unsafe { read_versioned_payload(stream, STATE_MAGIC, ACCEPTED_STATE_VERSIONS) })
     else {
         return kInvalidArgument;
     };
-    if versioned.payload.len() != STATE_PAYLOAD_BYTES {
-        return kInvalidArgument;
-    }
-    let Some(snapshot) = decode_payload(&versioned.payload) else {
+    let Some(snapshot) = decode_vst3_state_payload(versioned.version, &versioned.payload) else {
         return kInvalidArgument;
     };
     apply_snapshot(&shared.params, snapshot);
@@ -73,3 +79,32 @@ pub(super) unsafe fn query_instance(
 }
 
 toybox::vst3_plugin_entry!(GainSnapVst3Factory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::params::{GainSnapParams, PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_TARGET_DB};
+    use crate::state::{encode_payload, LEGACY_STATE_VERSION};
+
+    #[test]
+    fn vst3_v1_state_migrates_match_now_to_off_and_preserves_gain() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_TARGET_DB, -7.5);
+        params.set_param(PARAM_MATCH, 1.0);
+        params.set_param(PARAM_LOCKED_GAIN_DB, 5.25);
+        let payload = encode_payload(&params);
+        let encoded = try_encode_versioned_payload(STATE_MAGIC, LEGACY_STATE_VERSION, &payload)
+            .expect("legacy VST3 state should encode");
+        let versioned = decode_versioned_payload(&encoded, STATE_MAGIC, ACCEPTED_STATE_VERSIONS)
+            .expect("legacy VST3 state should be accepted");
+
+        let shared = GainSnapVst3Shared::new();
+        let snapshot = decode_vst3_state_payload(versioned.version, &versioned.payload)
+            .expect("legacy VST3 state should migrate");
+        apply_snapshot(&shared.params, snapshot);
+
+        assert_eq!(shared.params.target_db(), -7.5);
+        assert!(!shared.params.match_requested());
+        assert_eq!(shared.params.locked_gain_db(), 5.25);
+    }
+}

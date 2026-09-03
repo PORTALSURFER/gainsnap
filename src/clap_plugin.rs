@@ -1,4 +1,4 @@
-//! CLAP entry point for the GainSnap one-shot gain matcher.
+//! CLAP entry point for the GainSnap toggle gain matcher.
 
 use std::sync::Arc;
 
@@ -8,17 +8,81 @@ use toybox::clack_extensions::audio_ports::*;
 use toybox::clack_extensions::gui::{PluginGui, PluginGuiImpl};
 use toybox::clack_extensions::params::*;
 use toybox::clack_extensions::state::{PluginState, PluginStateImpl};
+use toybox::clack_plugin::events::UnknownEvent;
 use toybox::clack_plugin::stream::{InputStream, OutputStream};
 use toybox::clap::automation::{AutomationDrainBuffer, AutomationQueue};
 use toybox::clap::params::apply_param_events;
 use toybox::clap::prelude::*;
 use toybox::clap::process::{min_len, split_channel};
 use toybox::clap::state::{read_versioned_payload, write_versioned_payload};
+use toybox::events::{BlockEvent, BlockEventTimeline};
 
 use crate::dsp::GainSnapEngine;
-use crate::params::{param_count, text_to_value, value_to_text, write_param_info, GainSnapParams};
-use crate::state::{apply_snapshot, decode_payload, encode_payload, STATE_MAGIC, STATE_VERSION};
+use crate::params::{
+    param_count, text_to_value, value_to_text, write_param_info, GainSnapParams,
+    PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_TARGET_DB,
+};
+use crate::state::{
+    apply_snapshot, decode_payload, encode_payload, StateSnapshot, ACCEPTED_STATE_VERSIONS,
+    STATE_MAGIC, STATE_VERSION,
+};
 use crate::status::GuiStatus;
+
+/// Maximum number of CLAP parameter events retained for one process block.
+const CLAP_PARAMETER_EVENT_CAPACITY: usize = 256;
+/// Number of stable CLAP parameters with bounded overflow convergence slots.
+const CLAP_PARAMETER_COUNT: usize = 3;
+
+fn classify_clap_parameter(event: &UnknownEvent) -> Option<BlockEvent<(ClapId, f32), ()>> {
+    match event.as_core_event() {
+        Some(event_spaces::CoreEventSpace::ParamValue(param)) => {
+            let param_id = param.param_id()?;
+            clap_parameter_index(param_id)?;
+            Some(BlockEvent::Parameter((param_id, param.value() as f32)))
+        }
+        _ => None,
+    }
+}
+
+fn clap_parameter_index(param_id: ClapId) -> Option<usize> {
+    match param_id {
+        PARAM_TARGET_DB => Some(0),
+        PARAM_MATCH => Some(1),
+        PARAM_LOCKED_GAIN_DB => Some(2),
+        _ => None,
+    }
+}
+
+/// Collect CLAP parameter events into the reusable timeline and retain the
+/// final value for each parameter whose event overflowed the timeline.
+fn collect_clap_timeline_with_overflow(
+    input: &InputEvents<'_>,
+    frame_count: usize,
+    timeline: &mut BlockEventTimeline<(ClapId, f32), ()>,
+    overflow_final: &mut [Option<(ClapId, f32)>; CLAP_PARAMETER_COUNT],
+) {
+    timeline.begin_block(frame_count);
+    *overflow_final = [None; CLAP_PARAMETER_COUNT];
+    for event in input {
+        let Some(payload) = classify_clap_parameter(event) else {
+            continue;
+        };
+        let status = timeline.push(i64::from(event.header().time()), payload);
+        if status.overflowed() {
+            let BlockEvent::Parameter((param_id, value)) = payload else {
+                continue;
+            };
+            if let Some(index) = clap_parameter_index(param_id) {
+                overflow_final[index] = Some((param_id, value));
+            }
+        }
+    }
+    timeline.prepare();
+}
+
+fn decode_clap_state_payload(version: u32, payload: &[u8]) -> Result<StateSnapshot, PluginError> {
+    decode_payload(version, payload).ok_or(PluginError::Message("Invalid GainSnap state payload"))
+}
 
 /// CLAP plug-in type for GainSnap.
 pub struct GainSnapPlugin;
@@ -47,7 +111,7 @@ impl DefaultPluginFactory for GainSnapPlugin {
             .with_vendor("PORTALSURFER")
             .with_version(env!("CARGO_PKG_VERSION"))
             .with_description(
-                "One-shot peak matching: measure a track, apply gain, and hold the result",
+                "Peak matching toggle: measure while enabled, apply gain when disabled, and hold the result",
             )
             .with_features([plugin_features::AUDIO_EFFECT, plugin_features::STEREO])
     }
@@ -178,9 +242,8 @@ impl PluginStateImpl for GainSnapMainThread<'_> {
     }
 
     fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
-        let versioned = read_versioned_payload(input, STATE_MAGIC, &[STATE_VERSION])?;
-        let snapshot = decode_payload(&versioned.payload)
-            .ok_or(PluginError::Message("Invalid GainSnap state payload"))?;
+        let versioned = read_versioned_payload(input, STATE_MAGIC, ACCEPTED_STATE_VERSIONS)?;
+        let snapshot = decode_clap_state_payload(versioned.version, &versioned.payload)?;
         apply_snapshot(&self.shared.params, snapshot);
         Ok(())
     }
@@ -199,6 +262,8 @@ impl PluginGuiImpl for GainSnapMainThread<'_> {
 pub struct GainSnapAudioProcessor<'a> {
     shared: &'a GainSnapShared,
     engine: GainSnapEngine,
+    timeline: BlockEventTimeline<(ClapId, f32), ()>,
+    overflow_final: [Option<(ClapId, f32)>; CLAP_PARAMETER_COUNT],
     automation_drain: AutomationDrainBuffer,
 }
 
@@ -217,6 +282,8 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
                 audio_config.sample_rate as f32,
                 shared.params.locked_gain_db(),
             ),
+            timeline: BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY),
+            overflow_final: [None; CLAP_PARAMETER_COUNT],
             automation_drain: AutomationDrainBuffer::default(),
         })
     }
@@ -227,9 +294,13 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
-        apply_param_events(events.input, |param_id, value| {
-            self.shared.params.set_param(param_id, value as f32);
-        });
+        let frames = audio.frames_count() as usize;
+        collect_clap_timeline_with_overflow(
+            events.input,
+            frames,
+            &mut self.timeline,
+            &mut self.overflow_final,
+        );
 
         self.engine.begin_block(&self.shared.params);
         let mut processed_main = false;
@@ -250,6 +321,7 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
             self.process_stereo_pair(left, right);
             processed_main = true;
         }
+        self.apply_remaining_timeline();
 
         let report = self.engine.report();
         self.shared.status.update(
@@ -268,6 +340,18 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
 }
 
 impl GainSnapAudioProcessor<'_> {
+    fn apply_remaining_timeline(&mut self) {
+        while let Some(batch) = self.timeline.next_batch() {
+            for scheduled in batch.events() {
+                if let BlockEvent::Parameter((param_id, value)) = scheduled.event() {
+                    self.shared.params.set_param(*param_id, *value);
+                }
+            }
+            self.engine.sync_controls(&self.shared.params);
+        }
+        apply_clap_overflow_final(&self.overflow_final, &self.shared.params, &mut self.engine);
+    }
+
     fn process_stereo_pair(&mut self, left: ChannelPair<'_, f32>, right: ChannelPair<'_, f32>) {
         let (left_input, mut left_output, left_in_place) = split_channel(left);
         let (right_input, mut right_output, right_in_place) = split_channel(right);
@@ -281,7 +365,55 @@ impl GainSnapAudioProcessor<'_> {
             return;
         };
 
-        for frame in 0..frames {
+        let params = &self.shared.params;
+        let engine = &mut self.engine;
+        let timeline = &mut self.timeline;
+        let mut frame_start = 0;
+        while let Some(batch) = timeline.next_batch() {
+            let batch_end = batch.sample_offset().min(frames);
+            for frame in frame_start..batch_end {
+                let input_left = if left_in_place {
+                    left_output
+                        .as_deref()
+                        .and_then(|buffer| buffer.get(frame))
+                        .copied()
+                        .unwrap_or(0.0)
+                } else {
+                    left_input
+                        .and_then(|buffer| buffer.get(frame))
+                        .copied()
+                        .unwrap_or(0.0)
+                };
+                let input_right = if right_in_place {
+                    right_output
+                        .as_deref()
+                        .and_then(|buffer| buffer.get(frame))
+                        .copied()
+                        .unwrap_or(0.0)
+                } else {
+                    right_input
+                        .and_then(|buffer| buffer.get(frame))
+                        .copied()
+                        .unwrap_or(0.0)
+                };
+                let (output_left, output_right) =
+                    engine.process_frame(params, input_left, input_right);
+                if let Some(buffer) = left_output.as_deref_mut() {
+                    buffer[frame] = output_left;
+                }
+                if let Some(buffer) = right_output.as_deref_mut() {
+                    buffer[frame] = output_right;
+                }
+            }
+            for scheduled in batch.events() {
+                if let BlockEvent::Parameter((param_id, value)) = scheduled.event() {
+                    params.set_param(*param_id, *value);
+                }
+            }
+            engine.sync_controls(params);
+            frame_start = batch_end;
+        }
+        for frame in frame_start..frames {
             let input_left = if left_in_place {
                 left_output
                     .as_deref()
@@ -306,9 +438,7 @@ impl GainSnapAudioProcessor<'_> {
                     .copied()
                     .unwrap_or(0.0)
             };
-            let (output_left, output_right) =
-                self.engine
-                    .process_frame(&self.shared.params, input_left, input_right);
+            let (output_left, output_right) = engine.process_frame(params, input_left, input_right);
             if let Some(buffer) = left_output.as_deref_mut() {
                 buffer[frame] = output_left;
             }
@@ -317,6 +447,17 @@ impl GainSnapAudioProcessor<'_> {
             }
         }
     }
+}
+
+fn apply_clap_overflow_final(
+    overflow_final: &[Option<(ClapId, f32)>; CLAP_PARAMETER_COUNT],
+    params: &GainSnapParams,
+    engine: &mut GainSnapEngine,
+) {
+    for event in overflow_final.iter().flatten() {
+        params.set_param(event.0, event.1);
+    }
+    engine.sync_controls(params);
 }
 
 impl PluginAudioProcessorParams for GainSnapAudioProcessor<'_> {
@@ -356,4 +497,162 @@ fn host_param_requester(host: HostSharedHandle<'_>) -> Option<HostParamRequester
     let host =
         unsafe { std::mem::transmute::<HostSharedHandle<'_>, HostSharedHandle<'static>>(host) };
     Some(HostParamRequester { host, params })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{encode_payload, LEGACY_STATE_VERSION};
+    use crate::status::MatchState;
+    use std::io::Cursor;
+    use toybox::clack_plugin::events::event_types::ParamValueEvent;
+    use toybox::clack_plugin::events::io::InputEvents;
+    use toybox::clack_plugin::events::Pckn;
+    use toybox::clack_plugin::stream::{InputStream, OutputStream};
+    use toybox::clack_plugin::utils::Cookie;
+    use toybox::clap::events::collect_clap_timeline;
+    use toybox::clap::state::{read_versioned_payload, write_versioned_payload};
+
+    fn parameter_event(time: u32, value: f64) -> ParamValueEvent {
+        ParamValueEvent::new(
+            time,
+            crate::params::PARAM_MATCH,
+            Pckn::match_all(),
+            value,
+            Cookie::empty(),
+        )
+    }
+
+    #[test]
+    fn clap_v1_state_migrates_match_now_to_off_and_preserves_gain() {
+        let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_TARGET_DB, -7.5);
+        params.set_param(crate::params::PARAM_MATCH, 1.0);
+        params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 5.25);
+        let payload = encode_payload(&params);
+
+        let mut encoded = Vec::new();
+        {
+            let mut output = OutputStream::from_writer(&mut encoded);
+            write_versioned_payload(&mut output, STATE_MAGIC, LEGACY_STATE_VERSION, &payload)
+                .expect("legacy CLAP state should encode");
+        }
+        let mut cursor = Cursor::new(encoded);
+        let mut input = InputStream::from_reader(&mut cursor);
+        let versioned = read_versioned_payload(&mut input, STATE_MAGIC, ACCEPTED_STATE_VERSIONS)
+            .expect("legacy CLAP state should be accepted");
+
+        let snapshot = decode_clap_state_payload(versioned.version, &versioned.payload)
+            .expect("legacy CLAP state should migrate");
+        apply_snapshot(&params, snapshot);
+
+        assert_eq!(params.target_db(), -7.5);
+        assert!(!params.match_requested());
+        assert_eq!(params.locked_gain_db(), 5.25);
+    }
+
+    fn run_timeline(
+        timeline: &mut BlockEventTimeline<(ClapId, f32), ()>,
+        params: &GainSnapParams,
+        engine: &mut GainSnapEngine,
+        samples: &[f32],
+    ) {
+        engine.begin_block(params);
+        let mut frame = 0;
+        while let Some(batch) = timeline.next_batch() {
+            let batch_frame = batch.sample_offset().min(samples.len());
+            for sample in samples.iter().take(batch_frame).skip(frame) {
+                let _ = engine.process_frame(params, *sample, *sample);
+            }
+            for scheduled in batch.events() {
+                if let BlockEvent::Parameter((param_id, value)) = scheduled.event() {
+                    params.set_param(*param_id, *value);
+                }
+            }
+            engine.sync_controls(params);
+            frame = batch_frame;
+        }
+        for sample in samples.iter().skip(frame) {
+            let _ = engine.process_frame(params, *sample, *sample);
+        }
+    }
+
+    #[test]
+    fn clap_off_event_at_nonzero_offset_finalizes_prior_frames_only() {
+        let source = [parameter_event(0, 1.0), parameter_event(512, 0.0)];
+        let input = InputEvents::from_buffer(&source);
+        let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
+        collect_clap_timeline(&input, 1024, &mut timeline, classify_clap_parameter);
+        assert_eq!(
+            timeline
+                .events()
+                .iter()
+                .map(|event| event.sample_offset())
+                .collect::<Vec<_>>(),
+            vec![0, 512]
+        );
+
+        let mut samples = [0.25_f32; 1024];
+        samples[512..].fill(0.9);
+        let params = GainSnapParams::new();
+        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        run_timeline(&mut timeline, &params, &mut engine, &samples);
+
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
+    }
+
+    #[test]
+    fn clap_on_event_at_nonzero_offset_starts_measurement_there() {
+        let source = [parameter_event(512, 1.0), parameter_event(1024, 0.0)];
+        let input = InputEvents::from_buffer(&source);
+        let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
+        collect_clap_timeline(&input, 1024, &mut timeline, classify_clap_parameter);
+        assert_eq!(
+            timeline
+                .events()
+                .iter()
+                .map(|event| event.sample_offset())
+                .collect::<Vec<_>>(),
+            vec![512, 1024]
+        );
+
+        let mut samples = [0.9_f32; 1024];
+        samples[512..].fill(0.25);
+        let params = GainSnapParams::new();
+        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        run_timeline(&mut timeline, &params, &mut engine, &samples);
+
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
+    }
+
+    #[test]
+    fn clap_overflow_match_off_converges_before_next_block() {
+        let mut source = Vec::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY + 1);
+        for _ in 0..CLAP_PARAMETER_EVENT_CAPACITY {
+            source.push(parameter_event(0, 1.0));
+        }
+        source.push(parameter_event(1024, 0.0));
+        let input = InputEvents::from_buffer(&source);
+        let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
+        let mut overflow_final = [None; CLAP_PARAMETER_COUNT];
+        collect_clap_timeline_with_overflow(&input, 1024, &mut timeline, &mut overflow_final);
+
+        assert_eq!(timeline.events().len(), CLAP_PARAMETER_EVENT_CAPACITY);
+        assert_eq!(
+            overflow_final[clap_parameter_index(PARAM_MATCH).expect("known parameter")],
+            Some((PARAM_MATCH, 0.0))
+        );
+
+        let params = GainSnapParams::new();
+        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        run_timeline(&mut timeline, &params, &mut engine, &[0.25; 1024]);
+        apply_clap_overflow_final(&overflow_final, &params, &mut engine);
+
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Locked);
+    }
 }

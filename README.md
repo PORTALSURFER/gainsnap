@@ -1,16 +1,15 @@
 # GainSnap
 
-One-shot peak matching for Ableton tracks
+Toggle peak matching for Ableton tracks
 
 AudioDev plug-in repository (gainsnap), category **Utility**.
 
 ## Development
 
-GainSnap measures a stereo track's sample peak for 0.5 seconds, applies the
-bounded gain correction needed to reach the selected target, and holds that
-correction after the one-shot match completes. Disable Match Now after the
-measurement to leave the gain fixed. Shared host and GUI mechanics remain in
-Toybox.
+GainSnap measures a stereo track's finite sample peak while Match is enabled,
+applies the bounded gain correction needed to reach the selected target when
+Match is disabled, and holds that correction until the next measurement.
+Shared host and GUI mechanics remain in Toybox.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 
@@ -33,7 +32,7 @@ VST3 bundle before returning.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "One-shot peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak, applies the gain needed to reach a chosen target, and holds that gain when matching is complete."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

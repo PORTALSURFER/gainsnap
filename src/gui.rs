@@ -27,9 +27,9 @@ use crate::clap_plugin::HostParamRequester;
 use crate::params::{PARAM_MATCH, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
 use crate::status::{GuiStatus, MatchState};
 
-/// Preferred logical editor width for the compact one-shot control surface.
+/// Preferred logical editor width for the compact toggle control surface.
 pub const WINDOW_WIDTH: u32 = 300;
-/// Preferred logical editor height for the compact one-shot control surface.
+/// Preferred logical editor height for the compact toggle control surface.
 pub const WINDOW_HEIGHT: u32 = 320;
 /// Minimum logical editor width.
 pub const MIN_WINDOW_WIDTH: u32 = 300;
@@ -579,7 +579,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let match_state = state.status.state();
     let status_line = match match_state {
         MatchState::Ready => "Ready — target".to_string(),
-        MatchState::Measuring => format!("Measuring… {:>3.0}%", state.status.progress() * 100.0),
+        MatchState::Measuring => "Measuring… toggle off to lock".to_string(),
         MatchState::Locked => format!("Locked {:+.2} dB", state.status.locked_gain_db()),
         MatchState::NoSignal => "No signal — retry".to_string(),
     };
@@ -648,7 +648,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .spacing(8.0);
     let view = column([
         text("GAIN SNAP").key("title").height(24.0),
-        text("ONE-SHOT PEAK MATCH").key("subtitle").height(18.0),
+        text("TOGGLE PEAK MATCH").key("subtitle").height(18.0),
         row([target_control, action_control])
             .height(216.0)
             .spacing(12.0),

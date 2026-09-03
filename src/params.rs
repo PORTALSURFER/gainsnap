@@ -10,7 +10,7 @@ use toybox::clap::params::{ParamBuilder, ParamSpec};
 
 /// Target peak parameter identifier.
 pub const PARAM_TARGET_DB: ClapId = ClapId::new(1);
-/// One-shot matcher arm/trigger parameter identifier.
+/// Match measurement toggle parameter identifier.
 pub const PARAM_MATCH: ClapId = ClapId::new(2);
 /// Read-only calculated gain parameter identifier.
 pub const PARAM_LOCKED_GAIN_DB: ClapId = ClapId::new(3);
@@ -79,7 +79,7 @@ pub const PARAM_DEFS: [ParamDef; 3] = [
     },
     ParamDef {
         id: PARAM_MATCH,
-        name: b"Match Now",
+        name: b"Match",
         module: b"Match",
         min: 0.0,
         max: 1.0,
@@ -147,7 +147,7 @@ impl GainSnapParams {
         sanitize_target(self.target_db.load(Ordering::Relaxed))
     }
 
-    /// Read whether a one-shot match is currently requested.
+    /// Read whether match measurement is currently enabled.
     pub fn match_requested(&self) -> bool {
         self.match_request.load(Ordering::Relaxed) != 0
     }
@@ -201,7 +201,7 @@ pub fn write_param_info(index: u32, writer: &mut ParamInfoWriter) {
 pub fn value_to_text(id: ClapId, value: f64, writer: &mut ParamDisplayWriter) -> std::fmt::Result {
     match id {
         PARAM_TARGET_DB => write!(writer, "{:.1} dB", sanitize_target(value as f32)),
-        PARAM_MATCH => write!(writer, "{}", if value >= 0.5 { "Ready" } else { "Off" }),
+        PARAM_MATCH => write!(writer, "{}", if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(writer, "{:+.2} dB", sanitize_gain(value as f32)),
         _ => Ok(()),
     }
@@ -242,7 +242,7 @@ pub fn format_value_text(id: ClapId, value: f64) -> Option<String> {
     let mut text = String::new();
     match id {
         PARAM_TARGET_DB => write!(&mut text, "{:.1} dB", sanitize_target(value as f32)).ok()?,
-        PARAM_MATCH => text.push_str(if value >= 0.5 { "Ready" } else { "Off" }),
+        PARAM_MATCH => text.push_str(if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(&mut text, "{:+.2} dB", sanitize_gain(value as f32)).ok()?,
         _ => return None,
     }
@@ -301,7 +301,7 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
         }),
         1 => Some(Vst3ParamInfo {
             id: PARAM_MATCH.get(),
-            title: "Match Now",
+            title: "Match",
             short_title: "Match",
             units: "",
             step_count: 1,

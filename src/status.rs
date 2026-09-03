@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum MatchState {
-    /// The one-shot matcher is idle and ready for a new trigger.
+    /// Match is disabled and the engine is ready for a new measurement.
     Ready = 0,
-    /// The matcher is collecting the configured measurement window.
+    /// The matcher is collecting the input peak while Match is enabled.
     Measuring = 1,
     /// A gain has been calculated and is being held.
     Locked = 2,
-    /// The measurement window contained no usable finite signal.
+    /// Match was disabled without a usable finite signal being measured.
     NoSignal = 3,
 }
 

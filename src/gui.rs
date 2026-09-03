@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
-use radiant::layout::CrossAlign;
+use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    button, column, custom_widget_mapped, row, text, text_input, toggle, IntoView, Widget,
-    WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    button, column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView,
+    Widget, WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
-use radiant::runtime::{PaintFillRect, PaintPrimitive, PaintStrokeRect};
+use radiant::runtime::{PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStrokeRect};
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     FocusBehavior, PaintBounds, PointerButton, SliderMessage, TextInputMessage, WidgetCapabilities,
@@ -41,11 +41,26 @@ pub const MAX_WINDOW_WIDTH: u32 = 480;
 pub const MAX_WINDOW_HEIGHT: u32 = 520;
 
 const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
-const VERTICAL_SLIDER_TRACK_WIDTH: f32 = 8.0;
-const VERTICAL_SLIDER_THUMB_HEIGHT: f32 = 4.0;
+const TARGET_CONTROL_WIDTH: f32 = 56.0;
+const TARGET_SLIDER_HEIGHT: f32 = 176.0;
+const TARGET_ENTRY_HEIGHT: f32 = 28.0;
+const TARGET_CONTROL_SPACING: f32 = 8.0;
+const ACTION_CONTROL_WIDTH: f32 = 112.0;
+const ACTION_CONTROL_HEIGHT: f32 = 212.0;
+const MATCHING_CONTROL_HEIGHT: f32 = 64.0;
+const MATCH_BUTTON_WIDTH: f32 = 108.0;
+const MATCH_BUTTON_HEIGHT: f32 = 38.0;
+const NORMALIZE_BUTTON_WIDTH: f32 = 40.0;
+const NORMALIZE_BUTTON_HEIGHT: f32 = 22.0;
+const STATUS_INDICATOR_SIZE: f32 = 12.0;
+const VERTICAL_SLIDER_TRACK_WIDTH: f32 = 6.0;
+const VERTICAL_SLIDER_THUMB_HEIGHT: f32 = 6.0;
 const VERTICAL_SLIDER_MARKER_GAP: f32 = 2.0;
 const VERTICAL_SLIDER_MARKER_WIDTH: f32 = 8.0;
 const VERTICAL_SLIDER_MARKER_HEIGHT: f32 = 3.0;
+const VERTICAL_SLIDER_TICK_COUNT: usize = 13;
+const VERTICAL_SLIDER_TICK_WIDTH: f32 = 4.0;
+const VERTICAL_SLIDER_TICK_HEIGHT: f32 = 1.0;
 const VERTICAL_SLIDER_KEYBOARD_STEP_DB: f32 = 1.0;
 const VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
 
@@ -57,6 +72,121 @@ pub(crate) trait HostParamEditSink: Send + Sync {
     fn gesture_value(&self, config: &AutomationConfig, param_id: ClapId, value: f64);
     /// End a host gesture for a parameter.
     fn gesture_ended(&self, config: &AutomationConfig, param_id: ClapId);
+}
+
+/// Small passive state indicator kept visible without reintroducing a verbose
+/// status readout into the compact editor.
+#[derive(Clone, Debug, PartialEq)]
+struct StatusIndicator {
+    common: WidgetCommon,
+    state: MatchState,
+}
+
+impl StatusIndicator {
+    fn new(state: MatchState) -> Self {
+        let mut common = WidgetCommon::new(
+            0,
+            WidgetSizing::fixed(Vector2::new(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)),
+        );
+        common.focus = FocusBehavior::None;
+        common.paint.bounds = PaintBounds::ClipToRect;
+        common.paint.paints_focus = false;
+        common.paint.paints_state_layers = false;
+        Self { common, state }
+    }
+
+    fn label(state: MatchState) -> &'static str {
+        match state {
+            MatchState::Ready => "Ready",
+            MatchState::Measuring => "Measuring",
+            MatchState::Locked => "Locked",
+            MatchState::NoSignal => "No signal",
+        }
+    }
+
+    fn color(&self, theme: &ThemeTokens) -> Rgba8 {
+        match self.state {
+            MatchState::Ready => theme.border_emphasis,
+            MatchState::Measuring => theme.accent_mint,
+            MatchState::Locked => theme.highlight_cyan,
+            MatchState::NoSignal => theme.accent_danger,
+        }
+    }
+}
+
+impl WidgetSemantics for StatusIndicator {
+    fn automation_role(&self) -> AutomationRole {
+        AutomationRole::Readout
+    }
+
+    fn automation_label(&self) -> Option<String> {
+        Some(String::from("Match status"))
+    }
+
+    fn automation_description(&self) -> Option<String> {
+        Some(String::from("Current GainSnap matching status"))
+    }
+
+    fn automation_value_text(&self) -> Option<String> {
+        Some(Self::label(self.state).to_owned())
+    }
+}
+
+impl Widget for StatusIndicator {
+    fn common(&self) -> &WidgetCommon {
+        &self.common
+    }
+
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        &mut self.common
+    }
+
+    fn handle_input(&mut self, _bounds: Rect, _input: WidgetInput) -> Option<WidgetOutput> {
+        None
+    }
+
+    fn needs_state_synchronization(&self) -> bool {
+        false
+    }
+
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        WidgetCapabilities::new().semantics(self)
+    }
+
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        _layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        if !bounds.has_finite_positive_area() {
+            return;
+        }
+        let diameter = bounds.width().min(bounds.height()).min(8.0);
+        if diameter <= 0.0 {
+            return;
+        }
+        let center = Point::new(
+            bounds.min.x + bounds.width() * 0.5,
+            bounds.min.y + bounds.height() * 0.5,
+        );
+        let radius = diameter * 0.5;
+        let points = (0..16)
+            .map(|index| {
+                let angle = std::f32::consts::TAU * index as f32 / 16.0;
+                Point::new(
+                    center.x + radius * angle.cos(),
+                    center.y + radius * angle.sin(),
+                )
+            })
+            .collect::<Vec<_>>();
+        primitives.push(PaintPrimitive::FillPolygon(PaintFillPolygon {
+            widget_id: self.common.id,
+            points: Arc::from(points),
+            color: self.color(theme),
+        }));
+    }
 }
 
 /// Compact vertical target control used because the pinned Radiant slider is
@@ -249,10 +379,51 @@ impl Widget for VerticalSlider {
             self.common.style,
             self.common.state,
         );
+        let frame = Rect::from_min_max(
+            Point::new(bounds.min.x + 0.5, bounds.min.y + 0.5),
+            Point::new(bounds.max.x - 0.5, bounds.max.y - 0.5),
+        );
+        primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
+            widget_id: self.common.id,
+            rect: frame,
+            color: theme.border,
+            width: 1.0,
+        }));
+        let tick_color = theme.grid_strong;
+        for index in 0..VERTICAL_SLIDER_TICK_COUNT {
+            let fraction = index as f32 / (VERTICAL_SLIDER_TICK_COUNT - 1) as f32;
+            let y = bounds.min.y + (1.0 - fraction) * bounds.height();
+            let tick_y = (y - VERTICAL_SLIDER_TICK_HEIGHT * 0.5)
+                .clamp(bounds.min.y, bounds.max.y - VERTICAL_SLIDER_TICK_HEIGHT);
+            let tick_width = if index % 2 == 0 {
+                VERTICAL_SLIDER_TICK_WIDTH
+            } else {
+                VERTICAL_SLIDER_TICK_WIDTH - 1.0
+            };
+            primitives.push(PaintPrimitive::FillRect(PaintFillRect {
+                widget_id: self.common.id,
+                rect: Rect::from_min_max(
+                    Point::new(bounds.min.x + 5.0, tick_y),
+                    Point::new(
+                        bounds.min.x + 5.0 + tick_width,
+                        tick_y + VERTICAL_SLIDER_TICK_HEIGHT,
+                    ),
+                ),
+                color: tick_color,
+            }));
+            primitives.push(PaintPrimitive::FillRect(PaintFillRect {
+                widget_id: self.common.id,
+                rect: Rect::from_min_max(
+                    Point::new(bounds.max.x - 5.0 - tick_width, tick_y),
+                    Point::new(bounds.max.x - 5.0, tick_y + VERTICAL_SLIDER_TICK_HEIGHT),
+                ),
+                color: tick_color,
+            }));
+        }
         primitives.push(PaintPrimitive::FillRect(PaintFillRect {
             widget_id: self.common.id,
             rect: track,
-            color: theme.bg_tertiary,
+            color: theme.bg_primary,
         }));
         let fill_height = track.height() * self.value.clamp(0.0, 1.0);
         primitives.push(PaintPrimitive::FillRect(PaintFillRect {
@@ -296,7 +467,7 @@ impl Widget for VerticalSlider {
         primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
             widget_id: self.common.id,
             rect: track,
-            color: theme.border_emphasis,
+            color: theme.grid_strong,
             width: 1.0,
         }));
         if self.common.state.focused && self.common.paint.paints_focus {
@@ -724,12 +895,6 @@ pub(crate) fn new_gui(
 #[allow(clippy::arc_with_non_send_sync)]
 fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let match_state = state.status.state();
-    let status_line = match match_state {
-        MatchState::Ready => "Ready — target".to_string(),
-        MatchState::Measuring => "Measuring… toggle off to lock".to_string(),
-        MatchState::Locked => format!("Locked {:+.2} dB", state.status.locked_gain_db()),
-        MatchState::NoSignal => "No signal — retry".to_string(),
-    };
     let target_db = state.parameter_value(PARAM_TARGET_DB, TARGET_RANGE);
     state.sync_target_text(target_db);
     let target = custom_widget_mapped(
@@ -744,14 +909,15 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     )
     .primary()
     .key("target-peak")
-    .width(34.0)
-    .height(140.0);
+    .width(TARGET_CONTROL_WIDTH)
+    .height(TARGET_SLIDER_HEIGHT);
     let target_entry = text_input(state.target_text.clone())
         .placeholder("-12.0")
         .message_event(EditorMessage::TargetTextChanged)
         .key("target-entry")
-        .width(84.0)
-        .height(30.0);
+        .subtle()
+        .width(TARGET_CONTROL_WIDTH)
+        .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
         toggle(
             "MATCH",
@@ -763,58 +929,48 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
             checked,
         })
         .key("match-now")
-        .width(96.0)
-        .height(30.0),
-        button("NORMALIZE")
+        .width(MATCH_BUTTON_WIDTH)
+        .height(MATCH_BUTTON_HEIGHT),
+        button("0 dB")
             .subtle()
             .message(EditorMessage::Normalize)
             .key("normalize")
-            .size(96.0, 30.0),
+            .size(NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT)
+            .tooltip("Set target to 0 dBFS and start Match"),
     ])
-    .width(156.0)
-    .height(68.0)
-    .spacing(8.0)
-    .align_cross(CrossAlign::Start);
-    let target_control = column([
-        text("TARGET PEAK").key("target-label").height(18.0),
-        target,
-        target_entry,
-        text("dBFS").key("target-units").height(16.0),
-    ])
-    .width(100.0)
-    .spacing(4.0);
-    let telemetry = column([
-        text(format!("IN  {:.1} dBFS", state.status.input_peak_db()))
-            .key("input-readout")
-            .height(18.0),
-        text(format!("OUT {:.1} dBFS", state.status.output_peak_db()))
-            .key("output-readout")
-            .height(18.0),
-        text(format!("GAIN {:+.2} dB", state.status.locked_gain_db()))
-            .key("gain-readout")
-            .height(18.0),
-    ])
-    .height(58.0)
-    .spacing(2.0);
+    .width(ACTION_CONTROL_WIDTH)
+    .height(MATCHING_CONTROL_HEIGHT)
+    .spacing(4.0)
+    .align_main(MainAlign::Center)
+    .align_cross(CrossAlign::End);
+    let target_control = column([target, target_entry])
+        .width(TARGET_CONTROL_WIDTH)
+        .height(ACTION_CONTROL_HEIGHT)
+        .spacing(TARGET_CONTROL_SPACING)
+        .align_cross(CrossAlign::Center);
     let action_control = column([
+        text("").height(32.0),
         matching,
-        text(status_line).key("status").height(44.0),
-        telemetry,
+        text("").height(10.0),
+        custom_widget(StatusIndicator::new(match_state), |_output| None)
+            .key("status-indicator")
+            .size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)
+            .tooltip(StatusIndicator::label(match_state)),
     ])
-    .width(156.0)
-    .spacing(8.0);
-    let view = column([
-        text("GAIN SNAP").key("title").height(24.0),
-        text("TOGGLE PEAK MATCH").key("subtitle").height(18.0),
-        row([target_control, action_control])
-            .height(216.0)
-            .spacing(12.0),
-        text("Target • Match • Lock").key("footer").height(20.0),
-    ])
-    .padding(12.0)
-    .spacing(6.0)
-    .fill_width()
-    .fill_height();
+    .width(ACTION_CONTROL_WIDTH)
+    .height(ACTION_CONTROL_HEIGHT)
+    .spacing(4.0)
+    .align_main(MainAlign::Center)
+    .align_cross(CrossAlign::End);
+    let view = row([target_control, action_control])
+        .height(ACTION_CONTROL_HEIGHT)
+        .spacing(32.0)
+        .padding_x(64.0)
+        .padding_y(24.0)
+        .align_main(MainAlign::Start)
+        .align_cross(CrossAlign::Center)
+        .fill_width()
+        .fill_height();
     Arc::new(view.into_surface())
 }
 
@@ -973,9 +1129,9 @@ mod tests {
         let bottom = marker_center_y(track, TARGET_MIN_DB);
         let middle = marker_center_y(track, -18.0);
         let top = marker_center_y(track, TARGET_MAX_DB);
-        assert!((bottom - 138.0).abs() < f32::EPSILON);
-        assert!((middle - 70.0).abs() < f32::EPSILON);
-        assert!((top - 2.0).abs() < f32::EPSILON);
+        assert!((bottom - (track.max.y - VERTICAL_SLIDER_THUMB_HEIGHT * 0.5)).abs() < f32::EPSILON);
+        assert!((middle - track.center().y).abs() < f32::EPSILON);
+        assert!((top - (track.min.y + VERTICAL_SLIDER_THUMB_HEIGHT * 0.5)).abs() < f32::EPSILON);
         assert!(top < middle && middle < bottom);
 
         for db in [-120.0, TARGET_MIN_DB, TARGET_MAX_DB, 24.0] {
@@ -1112,11 +1268,15 @@ mod tests {
             .paint_plan;
 
         assert_eq!(preferred_window_size(), (300, 320));
-        assert!(plan.contains_text("TARGET PEAK"));
         assert!(plan.contains_text("MATCH"));
-        assert!(plan.contains_text("NORMALIZE"));
-        assert!(plan.contains_text("dBFS"));
+        assert!(plan.contains_text("0 dB"));
         assert!(plan.contains_text_input());
+        assert!(!plan.contains_text("GAIN SNAP"));
+        assert!(!plan.contains_text("TOGGLE PEAK MATCH"));
+        assert!(!plan.contains_text("TARGET PEAK"));
+        assert!(!plan.contains_text("NORMALIZE"));
+        assert!(!plan.contains_text("dBFS"));
+        assert!(!plan.contains_text("Ready — target"));
     }
 
     #[test]
@@ -1136,12 +1296,12 @@ mod tests {
             .first_widget_rect(match_widget_id)
             .expect("match button should paint a rectangular control");
 
-        assert!((match_bounds.width() - 96.0).abs() < f32::EPSILON);
-        assert!((match_bounds.height() - 30.0).abs() < f32::EPSILON);
+        assert!((match_bounds.width() - MATCH_BUTTON_WIDTH).abs() < f32::EPSILON);
+        assert!((match_bounds.height() - MATCH_BUTTON_HEIGHT).abs() < f32::EPSILON);
 
         let normalize_widget_id = plan
-            .first_text_run("NORMALIZE")
-            .expect("normalize label should be painted")
+            .first_text_run("0 dB")
+            .expect("compact normalize label should be painted")
             .widget_id;
         let normalize_bounds = plan
             .primitives
@@ -1177,8 +1337,66 @@ mod tests {
             })
             .expect("normalize button should paint a polygon control");
 
-        assert!((normalize_bounds.width() - 96.0).abs() < f32::EPSILON);
-        assert!((normalize_bounds.height() - 30.0).abs() < f32::EPSILON);
+        assert!((normalize_bounds.width() - NORMALIZE_BUTTON_WIDTH).abs() < f32::EPSILON);
+        assert!((normalize_bounds.height() - NORMALIZE_BUTTON_HEIGHT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn compact_surface_places_meter_and_entry_in_a_single_vertical_control() {
+        let mut state = editor_state();
+        let plan = project_surface(&mut state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &ThemeTokens::default(),
+            )
+            .paint_plan;
+        let frame = plan
+            .stroke_rects()
+            .find(|stroke| {
+                (stroke.rect.width() - (TARGET_CONTROL_WIDTH - 1.0)).abs() < f32::EPSILON
+                    && (stroke.rect.height() - (TARGET_SLIDER_HEIGHT - 1.0)).abs() < f32::EPSILON
+            })
+            .expect("the vertical meter should have a framed control bounds");
+        let tick_count = plan
+            .fill_rects_for_widget(frame.widget_id)
+            .filter(|fill| {
+                fill.rect.height() == VERTICAL_SLIDER_TICK_HEIGHT
+                    && fill.rect.width() <= VERTICAL_SLIDER_TICK_WIDTH
+            })
+            .count();
+        assert_eq!(tick_count, VERTICAL_SLIDER_TICK_COUNT * 2);
+
+        let entry = plan
+            .first_text_input()
+            .expect("the target entry should remain visible below the meter");
+        assert!(entry.rect.min.y >= frame.rect.max.y);
+        assert!(entry.rect.width() <= TARGET_CONTROL_WIDTH);
+    }
+
+    #[test]
+    fn status_indicator_keeps_each_match_state_visually_distinct() {
+        let theme = ThemeTokens::default();
+        for (state, expected_color) in [
+            (MatchState::Ready, theme.border_emphasis),
+            (MatchState::Measuring, theme.accent_mint),
+            (MatchState::Locked, theme.highlight_cyan),
+            (MatchState::NoSignal, theme.accent_danger),
+        ] {
+            let indicator = StatusIndicator::new(state);
+            let mut primitives = Vec::new();
+            indicator.append_paint(
+                &mut primitives,
+                Rect::from_size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE),
+                &radiant::layout::LayoutOutput::default(),
+                &theme,
+            );
+            let polygon = primitives
+                .iter()
+                .find_map(PaintPrimitive::fill_polygon)
+                .expect("status indicator should paint a dot");
+            assert_eq!(polygon.points.len(), 16);
+            assert_eq!(polygon.color, expected_color);
+        }
     }
 
     #[test]
@@ -1195,17 +1413,20 @@ mod tests {
 
         status.update(-12.0, -12.0, 0.0, 0.5, MatchState::Measuring);
         assert!(editor.needs_realtime_redraw());
-        assert!(editor
-            .paint_plan()
-            .text_labels()
-            .any(|label| label.starts_with("Measuring…")));
+        let plan = editor.paint_plan();
+        assert!(plan
+            .fill_polygons()
+            .any(|polygon| polygon.points.len() == 16));
+        assert!(!plan.contains_text("Measuring… toggle off to lock"));
         assert!(!editor.needs_realtime_redraw());
 
         status.update(-6.0, -3.0, 3.0, 1.0, MatchState::Locked);
         assert!(editor.needs_realtime_redraw());
-        assert!(editor
-            .paint_plan()
-            .contains_text_after_x("Locked +3.00 dB", 0.0));
+        let plan = editor.paint_plan();
+        assert!(plan
+            .fill_polygons()
+            .any(|polygon| polygon.points.len() == 16));
+        assert!(!plan.contains_text("Locked +3.00 dB"));
         assert!(!editor.needs_realtime_redraw());
     }
 
@@ -1256,8 +1477,8 @@ mod tests {
 
         assert!(updated_input.min.y < initial_input.min.y);
         assert!(updated_output.min.y < initial_output.min.y);
-        assert!(plan.contains_text("IN  -6.0 dBFS"));
-        assert!(plan.contains_text("OUT -18.0 dBFS"));
+        assert!(!plan.contains_text("IN  -6.0 dBFS"));
+        assert!(!plan.contains_text("OUT -18.0 dBFS"));
         assert!(!editor.needs_realtime_redraw());
     }
 

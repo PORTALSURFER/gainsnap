@@ -165,10 +165,11 @@ audit_zip() {
   /usr/bin/ditto -x -k "${staged}/${slug}-v${version}-macos.${format}.zip" "${audit}"
   bundle="${audit}/${slug}.${format}"
   python3 - "${audit}" "${slug}" "${format}" <<'PY'
-import os, pathlib, sys
+import os, pathlib, stat, sys
 root = pathlib.Path(sys.argv[1]); slug = sys.argv[2]; fmt = sys.argv[3]
 bundle = root / f"{slug}.{fmt}"
-allowed = {bundle, bundle / "Contents", bundle / "Contents" / "Info.plist", bundle / "Contents" / "PkgInfo", bundle / "Contents" / "MacOS", bundle / "Contents" / "MacOS" / slug, bundle / "Contents" / "_CodeSignature", bundle / "Contents" / "_CodeSignature" / "CodeResources"}
+direct_code_resources = bundle / "Contents" / "CodeResources"
+allowed = {bundle, bundle / "Contents", bundle / "Contents" / "Info.plist", bundle / "Contents" / "PkgInfo", bundle / "Contents" / "MacOS", bundle / "Contents" / "MacOS" / slug, bundle / "Contents" / "_CodeSignature", bundle / "Contents" / "_CodeSignature" / "CodeResources", direct_code_resources}
 for current, directories, files in os.walk(root, followlinks=False):
     current_path = pathlib.Path(current)
     if current_path.is_symlink():
@@ -177,6 +178,9 @@ for current, directories, files in os.walk(root, followlinks=False):
         child = current_path / name
         if child.is_symlink() or child not in allowed:
             raise SystemExit(f"release ZIP contains unexpected topology: {child.relative_to(root)}")
+if direct_code_resources.exists() or direct_code_resources.is_symlink():
+    if direct_code_resources.is_symlink() or not stat.S_ISREG(direct_code_resources.stat().st_mode):
+        raise SystemExit("release ZIP direct Contents/CodeResources must be a regular non-symlink file")
 PY
   test -x "${bundle}/Contents/MacOS/${slug}"
   /usr/bin/plutil -lint "${bundle}/Contents/Info.plist" >/dev/null

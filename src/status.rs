@@ -18,6 +18,7 @@ pub enum MatchState {
 
 impl MatchState {
     /// Decode the compact atomic representation, defaulting safely to ready.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn from_raw(value: u32) -> Self {
         match value {
             1 => Self::Measuring,
@@ -78,31 +79,37 @@ impl GuiStatus {
     }
 
     /// Read the most recent input peak in decibels.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn input_peak_db(&self) -> f32 {
         read_f32(&self.input_peak_db)
     }
 
     /// Read the most recent output peak in decibels.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn output_peak_db(&self) -> f32 {
         read_f32(&self.output_peak_db)
     }
 
     /// Read the held gain in decibels.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn locked_gain_db(&self) -> f32 {
         read_f32(&self.locked_gain_db)
     }
 
     /// Read measurement progress from zero to one.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn progress(&self) -> f32 {
         read_f32(&self.progress).clamp(0.0, 1.0)
     }
 
     /// Read the current matcher state.
+    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
     pub fn state(&self) -> MatchState {
         MatchState::from_raw(self.state.load(Ordering::Relaxed))
     }
 }
 
+#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
 fn read_f32(value: &AtomicU32) -> f32 {
     f32::from_bits(value.load(Ordering::Relaxed))
 }

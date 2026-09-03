@@ -18,7 +18,8 @@ the slider accepts direct dBFS entry as well.
 
 The vertical bar shows the latest block peaks in realtime: the orange marker on
 the left is the incoming (IN) level, and the cyan marker on the right is the
-adjusted (OUT) level. The IN and OUT readouts remain the exact dBFS values.
+adjusted (OUT) level. The compact interface uses those markers instead of
+separate numeric IN and OUT readouts.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 

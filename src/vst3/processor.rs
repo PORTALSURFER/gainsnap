@@ -15,7 +15,7 @@ use super::param_bridge;
 use super::shared_state::{
     GainSnapVst3Runtime, GainSnapVst3Shared, ParamEvent, PARAMETER_COUNT, PARAM_EVENT_CAPACITY,
 };
-use super::CONTROLLER_CID;
+use super::{vst3_bus_flag, CONTROLLER_CID};
 use crate::params::GainSnapParams;
 
 /// Exclusive audio-side borrow of Toybox's VST3 runtime owner.
@@ -334,7 +334,7 @@ impl IComponentTrait for GainSnapVst3Processor {
         bus.channelCount = 2;
         copy_wstring(label, &mut bus.name);
         bus.busType = BusTypes_::kMain as BusType;
-        bus.flags = BusInfo_::BusFlags_::kDefaultActive;
+        bus.flags = vst3_bus_flag(BusInfo_::BusFlags_::kDefaultActive);
         kResultOk
     }
 

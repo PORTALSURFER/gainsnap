@@ -1,6 +1,8 @@
 //! VST3 edit controller and hosted editor creation.
 
-use std::ffi::{CStr, CString};
+#[cfg(target_os = "macos")]
+use std::ffi::CStr;
+use std::ffi::CString;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;

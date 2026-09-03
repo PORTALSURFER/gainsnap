@@ -13,8 +13,20 @@ screenshot_height=320
 screenshot_name="${slug}-default-${screenshot_width}x${screenshot_height}.png"
 mode=""
 channel="stable"
+requested_version=""
+requested_publication_version=""
+requested_build_id=""
+requested_released_at=""
+requested_source_sha=""
 usage() { cat <<EOF
-Usage: scripts/release.sh --package-only|--publish --channel stable|rc|nightly
+Usage: scripts/release.sh --package-only|--publish --channel stable|rc|nightly [options]
+Options:
+  --version VERSION            Must match the Cargo.toml package version
+  --publication-version VERSION
+                               Channel publication version; core must match Cargo.toml
+  --build-id ID                Shared immutable release identity
+  --released-at ISO8601        Shared RFC3339 release timestamp
+  --source-sha SHA             Require this exact checked-out source SHA
 Production contract: macOS arm64; exactly CLAP+VST3; Developer ID Application
 signing; notarization/stapling; extracted ZIP audits; fresh ${screenshot_width}x${screenshot_height} screenshot
 tied to exact source SHA; non-empty changelog; canonical manifest-v2; hashes and
@@ -25,6 +37,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --package-only|--publish) [[ -z "${mode}" ]] || { echo "choose one release mode" >&2; exit 2; }; mode="${1#--}"; shift ;;
     --channel) channel="${2:?missing channel}"; shift 2 ;;
+    --version) requested_version="${2:?missing package version}"; shift 2 ;;
+    --publication-version) requested_publication_version="${2:?missing publication version}"; shift 2 ;;
+    --build-id) requested_build_id="${2:?missing build id}"; shift 2 ;;
+    --released-at) requested_released_at="${2:?missing released-at}"; shift 2 ;;
+    --source-sha) requested_source_sha="${2:?missing source SHA}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -38,16 +55,38 @@ branch="$(git symbolic-ref --quiet --short HEAD || true)"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "release source must be clean" >&2; exit 1; }
 git fetch origin main --quiet
 source_sha="$(git rev-parse HEAD)"
+[[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve an exact source SHA" >&2; exit 1; }
+if [[ -n "${requested_source_sha}" ]]; then
+  [[ "${requested_source_sha}" =~ ^[0-9a-f]{40}$ && "${requested_source_sha}" == "${source_sha}" ]] || {
+    echo "requested source SHA does not match checkout HEAD" >&2
+    exit 1
+  }
+fi
 [[ "${source_sha}" == "$(git rev-parse refs/remotes/origin/main)" ]] || { echo "release source must equal origin/main" >&2; exit 1; }
-version="$(sed -n '/^\[package\]/,/^\[/ { s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p; }' Cargo.toml | head -n 1)"
-[[ -n "${version}" ]] || { echo "Cargo.toml package version is missing" >&2; exit 1; }
-if [[ "${channel}" == stable && ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "stable release requires a stable SemVer without prerelease/build metadata" >&2; exit 1
+package_version="$(sed -n '/^\[package\]/,/^\[/ { s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p; }' Cargo.toml | head -n 1)"
+[[ -n "${package_version}" ]] || { echo "Cargo.toml package version is missing" >&2; exit 1; }
+if [[ -n "${requested_version}" && "${requested_version}" != "${package_version}" ]]; then
+  echo "requested package version ${requested_version} does not match Cargo.toml ${package_version}" >&2
+  exit 1
 fi
-if [[ "${channel}" == rc && ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]]; then
-  echo "RC release requires X.Y.Z-rc.N" >&2; exit 1
-fi
-build_id="${slug}-v${version}-${source_sha:0:12}"
+publication_version="${requested_publication_version:-${package_version}}"
+PYTHONDONTWRITEBYTECODE=1 python3 - "${package_version}" "${publication_version}" "${channel}" <<'PY'
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path("scripts").resolve()))
+from release_helper import validate_publication_version
+
+validate_publication_version(sys.argv[1], sys.argv[2], sys.argv[3])
+PY
+build_id="${requested_build_id:-${slug}-v${publication_version}-${source_sha:0:12}}"
+[[ "${build_id}" =~ ^[a-z0-9][a-z0-9._-]{1,127}$ ]] || { echo "invalid build id" >&2; exit 2; }
+expected_build_id="${slug}-v${publication_version}-${source_sha:0:12}"
+[[ "${build_id}" == "${expected_build_id}" ]] || {
+  echo "build id must be ${expected_build_id}" >&2
+  exit 1
+}
+released_at="${requested_released_at:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 [[ -s CHANGELOG.md ]] || { echo "CHANGELOG.md must not be empty" >&2; exit 1; }
 
 # Explicit environment-only production credentials. Values are never printed.
@@ -110,13 +149,13 @@ build_bundle() {
   local format="$1"
   local binary="$2"
   local bundle="${tmp_root}/${slug}.${format}"
-  local archive="${staged}/${slug}-v${version}-macos.${format}.zip"
+  local archive="${staged}/${slug}-v${publication_version}-macos.${format}.zip"
   local contents="${bundle}/Contents"
   mkdir -p "${contents}/MacOS"
   cp "${binary}" "${contents}/MacOS/${slug}"
   chmod 755 "${contents}/MacOS/${slug}"
   cat > "${contents}/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>${slug}</string><key>CFBundleIdentifier</key><string>com.portalsurfer.${slug}.${format}</string><key>CFBundleName</key><string>GainSnap</string><key>CFBundlePackageType</key><string>BNDL</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>${version}</string></dict></plist>
+<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>${slug}</string><key>CFBundleIdentifier</key><string>com.portalsurfer.${slug}.${format}</string><key>CFBundleName</key><string>GainSnap</string><key>CFBundlePackageType</key><string>BNDL</string><key>CFBundleShortVersionString</key><string>${package_version}</string><key>CFBundleVersion</key><string>${package_version}</string></dict></plist>
 EOF
   printf 'BNDL????' > "${contents}/PkgInfo"
   /usr/bin/plutil -lint "${contents}/Info.plist" >/dev/null
@@ -125,12 +164,12 @@ EOF
   /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${bundle}" "${tmp_root}/notary-${format}.zip"
   notary_json="${tmp_root}/notary-${format}.json"
   xcrun notarytool submit "${tmp_root}/notary-${format}.zip" --key "${notary_key_path}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}" --wait --output-format json > "${notary_json}"
-  notary_status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${notary_json}")"
-  notary_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${notary_json}")"
+  notary_status="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${notary_json}")"
+  notary_id="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${notary_json}")"
   [[ "${notary_status}" == Accepted ]] || { echo "${format} notarization was not accepted" >&2; exit 1; }
   notary_log="${tmp_root}/notary-${format}-${notary_id}.json"
   xcrun notarytool log "${notary_id}" --key "${notary_key_path}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}" --output-format json > "${notary_log}"
-  python3 - "${notary_log}" "${format}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${notary_log}" "${format}" <<'PY'
 import json, sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 for issue in payload.get("issues") or []:
@@ -164,9 +203,9 @@ audit_zip() {
   local audit="${tmp_root}/audit-${format}"
   local bundle
   mkdir -p "${audit}"
-  /usr/bin/ditto -x -k "${staged}/${slug}-v${version}-macos.${format}.zip" "${audit}"
+  /usr/bin/ditto -x -k "${staged}/${slug}-v${publication_version}-macos.${format}.zip" "${audit}"
   bundle="${audit}/${slug}.${format}"
-  python3 - "${audit}" "${slug}" "${format}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${audit}" "${slug}" "${format}" <<'PY'
 import os, pathlib, stat, sys
 root = pathlib.Path(sys.argv[1]); slug = sys.argv[2]; fmt = sys.argv[3]
 bundle = root / f"{slug}.{fmt}"
@@ -208,14 +247,14 @@ signing_team_id="$(codesign -dv --verbose=4 "${tmp_root}/${slug}.clap" 2>&1 | se
 audit_zip clap
 audit_zip vst3
 cp CHANGELOG.md "${staged}/CHANGELOG.md"
-python3 - "${staged}" "${version}" "${build_id}" "${channel}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${source_sha}" "${signing_team_id}" "${clap_notary_id}" "${vst3_notary_id}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${staged}" "${publication_version}" "${build_id}" "${channel}" "${released_at}" "${source_sha}" "${signing_team_id}" "${clap_notary_id}" "${vst3_notary_id}" <<'PY'
 import pathlib, sys
 folder = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(folder.parents[2] / "scripts"))
 from release_helper import build_manifest, canonical_json, validate_manifest
-out, version, build_id, channel, released_at, source_sha, team_id, clap_id, vst3_id = sys.argv[1:]
+out, publication_version, build_id, channel, released_at, source_sha, team_id, clap_id, vst3_id = sys.argv[1:]
 folder = pathlib.Path(out)
-manifest = build_manifest(product="gainsnap", repository="PORTALSURFER/gainsnap", version=version, build_id=build_id, channel=channel,
-    released_at=released_at, git_sha=source_sha, clap=folder / f"gainsnap-v{version}-macos.clap.zip", vst3=folder / f"gainsnap-v{version}-macos.vst3.zip",
+manifest = build_manifest(product="gainsnap", repository="PORTALSURFER/gainsnap", version=publication_version, build_id=build_id, channel=channel,
+    released_at=released_at, git_sha=source_sha, clap=folder / f"gainsnap-v{publication_version}-macos.clap.zip", vst3=folder / f"gainsnap-v{publication_version}-macos.vst3.zip",
     screenshot=folder / "gainsnap-default-300x320.png", changelog=folder / "CHANGELOG.md", signing_team_id=team_id, clap_notary_id=clap_id, vst3_notary_id=vst3_id)
 (folder / "release-manifest.json").write_bytes(canonical_json(manifest))
 validate_manifest(manifest, folder)
@@ -225,7 +264,7 @@ final_dir="${release_parent}/${build_id}"
 [[ ! -e "${final_dir}" ]] || { echo "release already exists locally: ${final_dir}" >&2; exit 1; }
 mv "${staged}" "${final_dir}"
 if [[ "${mode}" == publish ]]; then
-  python3 - "${final_dir}" "${endpoint}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${final_dir}" "${endpoint}" <<'PY'
 import json, os, pathlib, sys
 root = pathlib.Path(sys.argv[1]); sys.path.insert(0, str(root.parents[1].parent / "scripts"))
 from release_helper import publish_release

@@ -28,6 +28,16 @@ pub(super) const PROCESSOR_CID: TUID = uid(0x52C9D8A1, 0x4B273FEE, 0xA61D8952, 0
 /// Stable edit-controller class identifier.
 pub(super) const CONTROLLER_CID: TUID = uid(0x81C45E72, 0xAE0B3D9C, 0xB256F014, 0x6DB88935);
 
+#[cfg(target_os = "windows")]
+pub(super) const fn vst3_bus_flag(flag: i32) -> u32 {
+    flag as u32
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) const fn vst3_bus_flag(flag: u32) -> u32 {
+    flag
+}
+
 /// Build a VST3 state payload from the shared atomics.
 unsafe fn write_vst3_state(stream: *mut IBStream, shared: &GainSnapVst3Shared) -> tresult {
     let payload = crate::state::encode_payload(&shared.params);

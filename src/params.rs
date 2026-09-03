@@ -17,8 +17,8 @@ pub const PARAM_LOCKED_GAIN_DB: ClapId = ClapId::new(3);
 
 /// Lowest supported target peak in dBFS.
 pub const TARGET_MIN_DB: f32 = -36.0;
-/// Highest supported target peak in dBFS, leaving a small true-peak safety margin.
-pub const TARGET_MAX_DB: f32 = -0.1;
+/// Highest supported target peak in dBFS, including the 0 dBFS normalize target.
+pub const TARGET_MAX_DB: f32 = 0.0;
 /// Default target peak in dBFS.
 pub const DEFAULT_TARGET_DB: f32 = -12.0;
 /// Lowest gain correction GainSnap can apply.

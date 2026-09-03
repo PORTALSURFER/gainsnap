@@ -8,12 +8,17 @@ AudioDev plug-in repository (gainsnap), category **Utility**.
 
 GainSnap measures a stereo track's finite sample peak while Match is enabled,
 applies the bounded gain correction needed to reach the selected target when
-Match is disabled, and holds that correction until the next measurement.
+Match is disabled, and holds that correction until the next measurement. The
+Normalize button sets the target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
 When the target slider has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the slider accepts direct dBFS entry as well.
+
+The vertical bar shows the latest block peaks in realtime: the orange marker on
+the left is the incoming (IN) level, and the cyan marker on the right is the
+adjusted (OUT) level. The IN and OUT readouts remain the exact dBFS values.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 
@@ -36,7 +41,7 @@ VST3 bundle before returning.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical bar shows realtime incoming (IN) and adjusted (OUT) peak markers."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

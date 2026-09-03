@@ -103,6 +103,15 @@ impl GainSnapEngine {
             self.measurement_target_db = params.target_db();
             self.state = MatchState::Measuring;
             self.previous_match_request = true;
+        } else if self.state == MatchState::Measuring {
+            let target_db = params.target_db();
+            if (target_db - self.measurement_target_db).abs() > f32::EPSILON {
+                // A target edit while Match is active starts a fresh
+                // measurement. This keeps a Normalize action host-safe even
+                // when a host coalesces same-block Match parameter events.
+                self.measurement_peak = 0.0;
+                self.measurement_target_db = target_db;
+            }
         }
 
         let stored_gain_db = params.locked_gain_db();
@@ -287,6 +296,30 @@ mod tests {
         engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::Locked);
         assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
+    }
+
+    #[test]
+    fn changing_target_while_matching_restarts_measurement_with_new_target() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_TARGET_DB, -12.0);
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+
+        engine.begin_block(&params);
+        run_frames(&mut engine, &params, 0.5, 100);
+
+        // Normalize changes the target while Match is already enabled. The
+        // engine must discard the old peak even if the host delivers only the
+        // final Match=true state to the next processing block.
+        params.set_param(PARAM_TARGET_DB, 0.0);
+        engine.begin_block(&params);
+        run_frames(&mut engine, &params, 0.25, 100);
+
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
+
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - 12.0412).abs() < 0.02);
     }
 
     #[test]

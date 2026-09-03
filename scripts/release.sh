@@ -2,6 +2,8 @@
 # AudioDev release producer template v1; expanded by scripts/audiodev-plugin init.
 set -euo pipefail
 
+export PYTHONDONTWRITEBYTECODE=1
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 slug="gainsnap"

@@ -10,15 +10,15 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    column, custom_widget, custom_widget_mapped, row, text, toggle, IntoView, Widget, WidgetCommon,
-    WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView, Widget,
+    WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
 use radiant::runtime::{PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStrokeRect};
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, SliderMessage,
-    TextInputMessage, TextInputWidget, WidgetCapabilities, WidgetId, WidgetSemantics,
+    TextInputMessage, WidgetCapabilities, WidgetId, WidgetSemantics,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -67,8 +67,6 @@ const SURFACE_PADDING_X: f32 = 32.0;
 const SURFACE_COLUMN_GAP: f32 = 32.0;
 
 const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target peak, dBFS";
-const TARGET_ENTRY_AUTOMATION_DESCRIPTION: &str =
-    "Enter the target peak level in decibels relative to full scale";
 const NORMALIZE_AUTOMATION_LABEL: &str = "Normalize";
 const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Normalize to 0 dBFS and start Match";
 
@@ -194,92 +192,6 @@ impl Widget for StatusIndicator {
             points: Arc::from(points),
             color: self.color(theme),
         }));
-    }
-}
-
-/// Text-entry control with a semantic name that is independent of its compact
-/// placeholder and visible value.
-#[derive(Clone, Debug, PartialEq)]
-struct TargetEntryWidget {
-    input: TextInputWidget,
-}
-
-impl TargetEntryWidget {
-    fn new(value: String) -> Self {
-        let mut input = TextInputWidget::new(
-            0,
-            value,
-            WidgetSizing::fixed(Vector2::new(TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT)),
-        );
-        input.props.placeholder = Some(radiant::runtime::PaintText::from_static("-12.0"));
-        Self { input }
-    }
-}
-
-impl WidgetSemantics for TargetEntryWidget {
-    fn automation_role(&self) -> AutomationRole {
-        AutomationRole::TextInput
-    }
-
-    fn automation_label(&self) -> Option<String> {
-        Some(TARGET_ENTRY_AUTOMATION_LABEL.to_owned())
-    }
-
-    fn automation_description(&self) -> Option<String> {
-        Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION.to_owned())
-    }
-
-    fn automation_value_text(&self) -> Option<String> {
-        Some(self.input.state.value.clone())
-    }
-}
-
-impl Widget for TargetEntryWidget {
-    fn common(&self) -> &WidgetCommon {
-        self.input.common()
-    }
-
-    fn common_mut(&mut self) -> &mut WidgetCommon {
-        self.input.common_mut()
-    }
-
-    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
-        self.input
-            .handle_input(bounds, input)
-            .map(WidgetOutput::typed)
-    }
-
-    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
-        let Some(previous) = previous.as_any().downcast_ref::<Self>() else {
-            return;
-        };
-        self.input.synchronize_from_previous(&previous.input);
-    }
-
-    fn accepts_text_input(&self) -> bool {
-        self.input.accepts_text_input()
-    }
-
-    fn accepts_pointer_move(&self) -> bool {
-        self.input.accepts_pointer_move()
-    }
-
-    fn capabilities(&self) -> WidgetCapabilities<'_> {
-        WidgetCapabilities::new().semantics(self)
-    }
-
-    fn selected_text_slice(&self) -> Option<&str> {
-        self.input.selected_text_slice()
-    }
-
-    fn append_paint(
-        &self,
-        primitives: &mut Vec<PaintPrimitive>,
-        bounds: Rect,
-        layout: &radiant::layout::LayoutOutput,
-        theme: &ThemeTokens,
-    ) {
-        self.input.append_paint(primitives, bounds, layout, theme);
     }
 }
 
@@ -1086,14 +998,15 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .key("target-peak")
     .width(TARGET_CONTROL_WIDTH)
     .height(TARGET_SLIDER_HEIGHT);
-    let target_entry = custom_widget_mapped(
-        TargetEntryWidget::new(state.target_text.clone()),
-        EditorMessage::TargetTextChanged,
-    )
-    .key("target-entry")
-    .subtle()
-    .width(TARGET_CONTROL_WIDTH)
-    .height(TARGET_ENTRY_HEIGHT);
+    // Keep the framework text input as the leaf so its native editing lifecycle
+    // remains intact; the compact placeholder supplies the semantic name.
+    let target_entry = text_input(state.target_text.clone())
+        .placeholder(TARGET_ENTRY_AUTOMATION_LABEL)
+        .message_event(EditorMessage::TargetTextChanged)
+        .key("target-entry")
+        .subtle()
+        .width(TARGET_CONTROL_WIDTH)
+        .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
         toggle(
             "MATCH",
@@ -1552,20 +1465,6 @@ mod tests {
 
     #[test]
     fn compact_controls_export_explicit_automation_semantics() {
-        let target_entry = TargetEntryWidget::new(String::from("-12.0"));
-        assert!(target_entry.capabilities().has_semantics());
-        let target_semantics = target_entry.automation_semantics();
-        assert_eq!(target_semantics.role, AutomationRole::TextInput);
-        assert_eq!(
-            target_semantics.label.as_deref(),
-            Some(TARGET_ENTRY_AUTOMATION_LABEL)
-        );
-        assert_eq!(
-            target_semantics.description.as_deref(),
-            Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION)
-        );
-        assert_eq!(target_semantics.value_text.as_deref(), Some("-12.0"));
-
         let normalize = NormalizeButtonWidget::new();
         assert!(normalize.capabilities().has_semantics());
         let normalize_semantics = normalize.automation_semantics();
@@ -1601,10 +1500,7 @@ mod tests {
         let snapshot = editor.runtime.automation_snapshot();
         let target_node = find_node(&snapshot.root, TARGET_ENTRY_AUTOMATION_LABEL)
             .expect("target entry should export its semantic label through the surface");
-        assert_eq!(
-            target_node.semantics.description.as_deref(),
-            Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION)
-        );
+        assert_eq!(target_node.role, AutomationRole::TextInput);
         assert!(target_node
             .available_actions
             .iter()

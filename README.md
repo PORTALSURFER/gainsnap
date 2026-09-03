@@ -11,6 +11,10 @@ applies the bounded gain correction needed to reach the selected target when
 Match is disabled, and holds that correction until the next measurement.
 Shared host and GUI mechanics remain in Toybox.
 
+When the target slider has keyboard focus, Up/Down (and Left/Right) change the
+target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
+the slider accepts direct dBFS entry as well.
+
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 
 Local checks:

@@ -42,7 +42,8 @@ pub const MAX_WINDOW_HEIGHT: u32 = 520;
 
 const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
 const VERTICAL_SLIDER_TRACK_WIDTH: f32 = 8.0;
-const VERTICAL_SLIDER_KEYBOARD_STEP: f32 = 0.05;
+const VERTICAL_SLIDER_KEYBOARD_STEP_DB: f32 = 1.0;
+const VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
 
 /// Format-neutral host automation sink used by the VST3 editor.
 pub(crate) trait HostParamEditSink: Send + Sync {
@@ -62,6 +63,7 @@ pub(crate) trait HostParamEditSink: Send + Sync {
 struct VerticalSlider {
     common: WidgetCommon,
     value: f32,
+    shift_held: bool,
 }
 
 impl VerticalSlider {
@@ -72,7 +74,13 @@ impl VerticalSlider {
         Self {
             common,
             value: clamp_fraction(value),
+            shift_held: false,
         }
+    }
+
+    fn with_shift_held(mut self, shift_held: bool) -> Self {
+        self.shift_held = shift_held;
+        self
     }
 
     fn value_for_position(bounds: Rect, position: Point) -> f32 {
@@ -89,6 +97,21 @@ impl VerticalSlider {
         }
         self.value = value;
         Some(SliderMessage::ValueChanged { value })
+    }
+
+    fn keyboard_step_db(&self) -> f32 {
+        if self.shift_held {
+            VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB
+        } else {
+            VERTICAL_SLIDER_KEYBOARD_STEP_DB
+        }
+    }
+
+    fn step_value(&mut self, direction: f32) -> Option<SliderMessage> {
+        let target_db = TARGET_RANGE.denormalize(self.value);
+        let next_target_db = (target_db + direction * self.keyboard_step_db())
+            .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
+        self.set_value(TARGET_RANGE.normalize(next_target_db))
     }
 
     fn pointer_value(&mut self, bounds: Rect, position: Point) -> Option<WidgetOutput> {
@@ -167,13 +190,17 @@ impl Widget for VerticalSlider {
                 self.common.state.focused = focused;
                 None
             }
+            WidgetInput::PointerModifiersChanged { modifiers } => {
+                self.shift_held = modifiers.shift;
+                None
+            }
             WidgetInput::KeyPress(key) if self.common.state.focused => match key {
-                WidgetKey::ArrowUp | WidgetKey::ArrowRight => self
-                    .set_value(self.value + VERTICAL_SLIDER_KEYBOARD_STEP)
-                    .map(WidgetOutput::typed),
-                WidgetKey::ArrowDown | WidgetKey::ArrowLeft => self
-                    .set_value(self.value - VERTICAL_SLIDER_KEYBOARD_STEP)
-                    .map(WidgetOutput::typed),
+                WidgetKey::ArrowUp | WidgetKey::ArrowRight => {
+                    self.step_value(1.0).map(WidgetOutput::typed)
+                }
+                WidgetKey::ArrowDown | WidgetKey::ArrowLeft => {
+                    self.step_value(-1.0).map(WidgetOutput::typed)
+                }
                 WidgetKey::Home => self.set_value(0.0).map(WidgetOutput::typed),
                 WidgetKey::End => self.set_value(1.0).map(WidgetOutput::typed),
                 _ => None,
@@ -350,6 +377,7 @@ struct EditorState {
     edit_sink: Option<Arc<dyn HostParamEditSink>>,
     target_text: String,
     target_text_param: f32,
+    shift_held: bool,
 }
 
 impl EditorState {
@@ -373,6 +401,7 @@ impl EditorState {
             edit_sink,
             target_text: format_target_text(target_db),
             target_text_param: target_db,
+            shift_held: false,
         }
     }
 
@@ -489,7 +518,18 @@ impl GainSnapEditor {
     }
 
     fn dispatch_event(&mut self, event: Event) {
+        let shift_held = match event {
+            Event::PointerModifiersChanged { modifiers } => Some(modifiers.shift),
+            _ => None,
+        };
         let _ = self.runtime.dispatch_event(event);
+        if let Some(shift_held) = shift_held {
+            let shift_changed = self.runtime.bridge().state().shift_held != shift_held;
+            if shift_changed {
+                self.runtime.bridge_mut().state_mut().shift_held = shift_held;
+                self.runtime.refresh();
+            }
+        }
     }
 
     fn paint_plan(&mut self) -> &SurfacePaintPlan {
@@ -586,7 +626,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let target_db = state.parameter_value(PARAM_TARGET_DB, TARGET_RANGE);
     state.sync_target_text(target_db);
     let target = custom_widget_mapped(
-        VerticalSlider::new(TARGET_RANGE.normalize(target_db)),
+        VerticalSlider::new(TARGET_RANGE.normalize(target_db)).with_shift_held(state.shift_held),
         |message: SliderMessage| match message {
             SliderMessage::ValueChanged { value } => {
                 EditorMessage::TargetChanged(TARGET_RANGE.denormalize(value))
@@ -694,6 +734,7 @@ pub(crate) fn preferred_window_size() -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radiant::widgets::PointerModifiers;
 
     fn editor_state() -> EditorState {
         EditorState::new(
@@ -708,7 +749,7 @@ mod tests {
     #[test]
     fn vertical_slider_maps_pointer_and_keyboard_input() {
         let bounds = Rect::from_size(28.0, 140.0);
-        let mut slider = VerticalSlider::new(0.5);
+        let mut slider = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
 
         let output = slider
             .handle_input(bounds, WidgetInput::primary_press(Point::new(14.0, 0.0)))
@@ -737,8 +778,87 @@ mod tests {
             .expect("focused slider keyboard input should emit a value");
         assert_eq!(
             output.typed_copied::<SliderMessage>(),
-            Some(SliderMessage::ValueChanged { value: 0.95 })
+            Some(SliderMessage::ValueChanged {
+                value: TARGET_RANGE.normalize(-1.1),
+            })
         );
+    }
+
+    #[test]
+    fn vertical_slider_keyboard_steps_use_db_units_and_shift_fine_step() {
+        let bounds = Rect::from_size(28.0, 140.0);
+        let mut slider = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
+        slider.common.state.focused = true;
+
+        slider
+            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .expect("normal arrow input should emit a value");
+        let normal_target = TARGET_RANGE.denormalize(slider.value);
+        assert!((normal_target - (-11.0)).abs() < 0.0001);
+
+        slider.handle_input(
+            bounds,
+            WidgetInput::PointerModifiersChanged {
+                modifiers: PointerModifiers {
+                    shift: true,
+                    ..PointerModifiers::default()
+                },
+            },
+        );
+        slider
+            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .expect("shift arrow input should emit a value");
+        let fine_target = TARGET_RANGE.denormalize(slider.value);
+        assert!((fine_target - (-10.9)).abs() < 0.0001);
+
+        slider.handle_input(
+            bounds,
+            WidgetInput::PointerModifiersChanged {
+                modifiers: PointerModifiers::default(),
+            },
+        );
+        slider
+            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowDown))
+            .expect("normal arrow input after Shift should emit a value");
+        let normal_down_target = TARGET_RANGE.denormalize(slider.value);
+        assert!((normal_down_target - (-11.9)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn vertical_slider_keeps_projected_shift_modifier_when_rebuilt() {
+        let bounds = Rect::from_size(28.0, 140.0);
+        let previous = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
+        let mut current = VerticalSlider::new(previous.value).with_shift_held(true);
+
+        current.synchronize_from_previous(&previous);
+        current.common.state.focused = true;
+        current
+            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .expect("rebuilt slider should accept keyboard input");
+
+        let target_db = TARGET_RANGE.denormalize(current.value);
+        assert!((target_db - (-11.9)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn editor_captures_shift_before_a_focused_key_event() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let mut editor = GainSnapEditor::new(
+            params,
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+
+        editor.dispatch_event(Event::pointer_modifiers_changed(PointerModifiers {
+            shift: true,
+            ..PointerModifiers::default()
+        }));
+        assert!(editor.runtime.bridge().state().shift_held);
+
+        editor.dispatch_event(Event::pointer_modifiers_changed(PointerModifiers::default()));
+        assert!(!editor.runtime.bridge().state().shift_held);
     }
 
     #[test]

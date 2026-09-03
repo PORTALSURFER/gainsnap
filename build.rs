@@ -1,6 +1,13 @@
 use std::{env, fs};
 
-use toybox::bundle::windows::{windows_bundle_paths, windows_rustc_link_arg, WindowsBundleFormat};
+use toybox::bundle::windows::{windows_bundle_paths, WindowsBundleFormat};
+
+fn windows_rustc_link_arg(output_path: &std::path::Path) -> String {
+    // `cargo:rustc-cdylib-link-arg` forwards this value directly to `link.exe`.
+    // Quoting here can become part of the literal argument and break path parsing.
+    let normalized = output_path.to_string_lossy().replace('/', "\\");
+    format!("/OUT:{normalized}")
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -39,4 +46,27 @@ fn main() {
         "cargo:rustc-cdylib-link-arg={}",
         windows_rustc_link_arg(output_path)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::windows_rustc_link_arg;
+    use std::path::Path;
+
+    #[test]
+    fn windows_link_arg_has_no_quotes() {
+        let arg = windows_rustc_link_arg(Path::new("dist/plugin.vst3"));
+
+        assert_eq!(arg, r"/OUT:dist\plugin.vst3");
+        assert!(!arg.contains('"'));
+    }
+
+    #[test]
+    fn windows_link_arg_normalizes_windows_like_path_separators() {
+        let arg =
+            windows_rustc_link_arg(Path::new("D:/workspace/gainsnap/dist/gainsnap-v0.1.0.vst3"));
+
+        assert_eq!(arg, r"/OUT:D:\workspace\gainsnap\dist\gainsnap-v0.1.0.vst3");
+        assert!(!arg.contains('"'));
+    }
 }

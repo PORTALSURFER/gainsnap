@@ -10,15 +10,15 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    button, column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView,
-    Widget, WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    column, custom_widget, custom_widget_mapped, row, text, toggle, IntoView, Widget, WidgetCommon,
+    WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
 use radiant::runtime::{PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStrokeRect};
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
-    FocusBehavior, PaintBounds, PointerButton, SliderMessage, TextInputMessage, WidgetCapabilities,
-    WidgetId, WidgetSemantics,
+    ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, SliderMessage,
+    TextInputMessage, TextInputWidget, WidgetCapabilities, WidgetId, WidgetSemantics,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -63,6 +63,14 @@ const VERTICAL_SLIDER_TICK_WIDTH: f32 = 4.0;
 const VERTICAL_SLIDER_TICK_HEIGHT: f32 = 1.0;
 const VERTICAL_SLIDER_KEYBOARD_STEP_DB: f32 = 1.0;
 const VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
+const SURFACE_PADDING_X: f32 = 32.0;
+const SURFACE_COLUMN_GAP: f32 = 32.0;
+
+const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target peak, dBFS";
+const TARGET_ENTRY_AUTOMATION_DESCRIPTION: &str =
+    "Enter the target peak level in decibels relative to full scale";
+const NORMALIZE_AUTOMATION_LABEL: &str = "Normalize";
+const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Normalize to 0 dBFS and start Match";
 
 /// Format-neutral host automation sink used by the VST3 editor.
 pub(crate) trait HostParamEditSink: Send + Sync {
@@ -186,6 +194,173 @@ impl Widget for StatusIndicator {
             points: Arc::from(points),
             color: self.color(theme),
         }));
+    }
+}
+
+/// Text-entry control with a semantic name that is independent of its compact
+/// placeholder and visible value.
+#[derive(Clone, Debug, PartialEq)]
+struct TargetEntryWidget {
+    input: TextInputWidget,
+}
+
+impl TargetEntryWidget {
+    fn new(value: String) -> Self {
+        let mut input = TextInputWidget::new(
+            0,
+            value,
+            WidgetSizing::fixed(Vector2::new(TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT)),
+        );
+        input.props.placeholder = Some(radiant::runtime::PaintText::from_static("-12.0"));
+        Self { input }
+    }
+}
+
+impl WidgetSemantics for TargetEntryWidget {
+    fn automation_role(&self) -> AutomationRole {
+        AutomationRole::TextInput
+    }
+
+    fn automation_label(&self) -> Option<String> {
+        Some(TARGET_ENTRY_AUTOMATION_LABEL.to_owned())
+    }
+
+    fn automation_description(&self) -> Option<String> {
+        Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION.to_owned())
+    }
+
+    fn automation_value_text(&self) -> Option<String> {
+        Some(self.input.state.value.clone())
+    }
+}
+
+impl Widget for TargetEntryWidget {
+    fn common(&self) -> &WidgetCommon {
+        self.input.common()
+    }
+
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        self.input.common_mut()
+    }
+
+    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
+        self.input
+            .handle_input(bounds, input)
+            .map(WidgetOutput::typed)
+    }
+
+    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
+        let Some(previous) = previous.as_any().downcast_ref::<Self>() else {
+            return;
+        };
+        self.input.synchronize_from_previous(&previous.input);
+    }
+
+    fn accepts_text_input(&self) -> bool {
+        self.input.accepts_text_input()
+    }
+
+    fn accepts_pointer_move(&self) -> bool {
+        self.input.accepts_pointer_move()
+    }
+
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        WidgetCapabilities::new().semantics(self)
+    }
+
+    fn selected_text_slice(&self) -> Option<&str> {
+        self.input.selected_text_slice()
+    }
+
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        self.input.append_paint(primitives, bounds, layout, theme);
+    }
+}
+
+/// Compact normalize action whose accessible name describes the full action
+/// while retaining the short visible button label.
+#[derive(Clone, Debug, PartialEq)]
+struct NormalizeButtonWidget {
+    button: ButtonWidget,
+}
+
+impl NormalizeButtonWidget {
+    fn new() -> Self {
+        Self {
+            button: ButtonWidget::new(
+                0,
+                "0 dB",
+                WidgetSizing::fixed(Vector2::new(
+                    NORMALIZE_BUTTON_WIDTH,
+                    NORMALIZE_BUTTON_HEIGHT,
+                )),
+            ),
+        }
+    }
+}
+
+impl WidgetSemantics for NormalizeButtonWidget {
+    fn automation_role(&self) -> AutomationRole {
+        AutomationRole::Button
+    }
+
+    fn automation_label(&self) -> Option<String> {
+        Some(NORMALIZE_AUTOMATION_LABEL.to_owned())
+    }
+
+    fn automation_description(&self) -> Option<String> {
+        Some(NORMALIZE_AUTOMATION_DESCRIPTION.to_owned())
+    }
+}
+
+impl Widget for NormalizeButtonWidget {
+    fn common(&self) -> &WidgetCommon {
+        self.button.common()
+    }
+
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        self.button.common_mut()
+    }
+
+    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
+        self.button
+            .handle_input(bounds, input)
+            .map(WidgetOutput::typed)
+    }
+
+    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
+        let Some(previous) = previous.as_any().downcast_ref::<Self>() else {
+            return;
+        };
+        self.button.synchronize_from_previous(&previous.button);
+    }
+
+    fn accepts_pointer_move(&self) -> bool {
+        self.button.accepts_pointer_move()
+    }
+
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        WidgetCapabilities::new().semantics(self)
+    }
+
+    fn set_text_align(&mut self, align: radiant::widgets::TextAlign) -> bool {
+        self.button.set_text_align(align)
+    }
+
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        self.button.append_paint(primitives, bounds, layout, theme);
     }
 }
 
@@ -911,13 +1086,14 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .key("target-peak")
     .width(TARGET_CONTROL_WIDTH)
     .height(TARGET_SLIDER_HEIGHT);
-    let target_entry = text_input(state.target_text.clone())
-        .placeholder("-12.0")
-        .message_event(EditorMessage::TargetTextChanged)
-        .key("target-entry")
-        .subtle()
-        .width(TARGET_CONTROL_WIDTH)
-        .height(TARGET_ENTRY_HEIGHT);
+    let target_entry = custom_widget_mapped(
+        TargetEntryWidget::new(state.target_text.clone()),
+        EditorMessage::TargetTextChanged,
+    )
+    .key("target-entry")
+    .subtle()
+    .width(TARGET_CONTROL_WIDTH)
+    .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
         toggle(
             "MATCH",
@@ -931,12 +1107,13 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .key("match-now")
         .width(MATCH_BUTTON_WIDTH)
         .height(MATCH_BUTTON_HEIGHT),
-        button("0 dB")
-            .subtle()
-            .message(EditorMessage::Normalize)
-            .key("normalize")
-            .size(NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT)
-            .tooltip("Set target to 0 dBFS and start Match"),
+        custom_widget_mapped(NormalizeButtonWidget::new(), |_message: ButtonMessage| {
+            EditorMessage::Normalize
+        })
+        .subtle()
+        .key("normalize")
+        .size(NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT)
+        .tooltip("Set target to 0 dBFS and start Match"),
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(MATCHING_CONTROL_HEIGHT)
@@ -964,8 +1141,8 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .align_cross(CrossAlign::End);
     let view = row([target_control, action_control])
         .height(ACTION_CONTROL_HEIGHT)
-        .spacing(32.0)
-        .padding_x(64.0)
+        .spacing(SURFACE_COLUMN_GAP)
+        .padding_x(SURFACE_PADDING_X)
         .padding_y(24.0)
         .align_main(MainAlign::Start)
         .align_cross(CrossAlign::Center)
@@ -1371,6 +1548,118 @@ mod tests {
             .expect("the target entry should remain visible below the meter");
         assert!(entry.rect.min.y >= frame.rect.max.y);
         assert!(entry.rect.width() <= TARGET_CONTROL_WIDTH);
+    }
+
+    #[test]
+    fn compact_controls_export_explicit_automation_semantics() {
+        let target_entry = TargetEntryWidget::new(String::from("-12.0"));
+        assert!(target_entry.capabilities().has_semantics());
+        let target_semantics = target_entry.automation_semantics();
+        assert_eq!(target_semantics.role, AutomationRole::TextInput);
+        assert_eq!(
+            target_semantics.label.as_deref(),
+            Some(TARGET_ENTRY_AUTOMATION_LABEL)
+        );
+        assert_eq!(
+            target_semantics.description.as_deref(),
+            Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION)
+        );
+        assert_eq!(target_semantics.value_text.as_deref(), Some("-12.0"));
+
+        let normalize = NormalizeButtonWidget::new();
+        assert!(normalize.capabilities().has_semantics());
+        let normalize_semantics = normalize.automation_semantics();
+        assert_eq!(normalize_semantics.role, AutomationRole::Button);
+        assert_eq!(
+            normalize_semantics.label.as_deref(),
+            Some(NORMALIZE_AUTOMATION_LABEL)
+        );
+        assert_eq!(
+            normalize_semantics.description.as_deref(),
+            Some(NORMALIZE_AUTOMATION_DESCRIPTION)
+        );
+
+        fn find_node<'a>(
+            node: &'a radiant::runtime::AutomationNodeSnapshot,
+            label: &str,
+        ) -> Option<&'a radiant::runtime::AutomationNodeSnapshot> {
+            if node.label.as_deref() == Some(label) {
+                return Some(node);
+            }
+            node.children
+                .iter()
+                .find_map(|child| find_node(child, label))
+        }
+
+        let editor = GainSnapEditor::new(
+            Arc::new(crate::params::GainSnapParams::new()),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let snapshot = editor.runtime.automation_snapshot();
+        let target_node = find_node(&snapshot.root, TARGET_ENTRY_AUTOMATION_LABEL)
+            .expect("target entry should export its semantic label through the surface");
+        assert_eq!(
+            target_node.semantics.description.as_deref(),
+            Some(TARGET_ENTRY_AUTOMATION_DESCRIPTION)
+        );
+        assert!(target_node
+            .available_actions
+            .iter()
+            .any(|action| action == "set_text"));
+
+        let normalize_node = find_node(&snapshot.root, NORMALIZE_AUTOMATION_LABEL)
+            .expect("normalize should export its semantic label through the surface");
+        assert_eq!(
+            normalize_node.semantics.description.as_deref(),
+            Some(NORMALIZE_AUTOMATION_DESCRIPTION)
+        );
+        assert!(normalize_node
+            .available_actions
+            .iter()
+            .any(|action| action == "press"));
+    }
+
+    #[test]
+    fn compact_controls_fit_minimum_viewport_with_horizontal_margins() {
+        let mut state = editor_state();
+        let frame = project_surface(&mut state).frame_at_size(
+            Vector2::new(MIN_WINDOW_WIDTH as f32, MIN_WINDOW_HEIGHT as f32),
+            &ThemeTokens::default(),
+        );
+        let viewport = frame.viewport;
+        let epsilon = 0.001;
+        let control_sizes = [
+            (TARGET_CONTROL_WIDTH, ACTION_CONTROL_HEIGHT),
+            (ACTION_CONTROL_WIDTH, ACTION_CONTROL_HEIGHT),
+            (ACTION_CONTROL_WIDTH, MATCHING_CONTROL_HEIGHT),
+            (TARGET_CONTROL_WIDTH, TARGET_SLIDER_HEIGHT),
+            (TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT),
+            (MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT),
+            (NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT),
+        ];
+        let controls = frame
+            .layout
+            .rects
+            .values()
+            .copied()
+            .filter(|rect| {
+                control_sizes.iter().any(|(width, height)| {
+                    (rect.width() - width).abs() <= epsilon
+                        && (rect.height() - height).abs() <= epsilon
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(controls.len(), control_sizes.len());
+        for rect in controls {
+            assert!(rect.min.x >= SURFACE_PADDING_X - epsilon);
+            assert!(rect.max.x <= viewport.max.x - SURFACE_PADDING_X + epsilon);
+            assert!(rect.min.y >= 0.0);
+            assert!(rect.max.y <= viewport.max.y);
+        }
     }
 
     #[test]

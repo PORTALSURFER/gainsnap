@@ -1,0 +1,14 @@
+# AudioDev release contract v1.
+schema_version = 1
+slug = "gainsnap"
+display_name = "GainSnap"
+category = "Utility"
+tagline = "One-shot peak matching for Ableton tracks"
+description = "GainSnap measures an incoming track peak, applies the gain needed to reach a chosen target, and holds that gain when matching is complete."
+repository = "PORTALSURFER/gainsnap"
+toybox_rev = "1c40aeee6062b3bcebc2799fa2ab65cf36d160a2"
+manifest_schema = 2
+formats = ["clap", "vst3"]
+# Public PortalSurfer releases remain macOS arm64; the release workflow also uploads unsigned Windows Actions artifacts.
+platform = "macos"
+architectures = ["arm64"]

@@ -1,0 +1,29 @@
+[package]
+name = "gainsnap"
+version = "0.1.0"
+edition = "2021"
+publish = false
+resolver = "2"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["radiant-gui"]
+radiant-gui = ["toybox/radiant-gui", "dep:radiant"]
+vst3 = ["toybox/radiant-vst3", "radiant-gui"]
+screenshot-test = ["dep:image", "radiant-gui"]
+
+[dependencies]
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "1c40aeee6062b3bcebc2799fa2ab65cf36d160a2", default-features = false }
+radiant = { git = "https://github.com/PORTALSURFER/radiant.git", rev = "b21a4caa094294b3eb2b2b87f6c6bc08ced8b137", default-features = false, optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[build-dependencies]
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "1c40aeee6062b3bcebc2799fa2ab65cf36d160a2", default-features = false }
+
+[lints.rust]
+warnings = "deny"
+
+[lints.rustdoc]
+missing_crate_level_docs = "deny"

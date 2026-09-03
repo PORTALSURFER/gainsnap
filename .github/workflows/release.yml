@@ -1,0 +1,203 @@
+name: GainSnap release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: nightly
+        type: choice
+        options: [stable, rc, nightly]
+      publish:
+        description: Publish after production signing and notarization
+        required: true
+        default: false
+        type: boolean
+      only_if_changed:
+        description: Publish only when this channel has changed since its latest release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+concurrency:
+  group: gainsnap-release-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: production
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Capture checked-out source SHA
+        id: source_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check release source freshness
+        id: gate
+        if: ${{ inputs.only_if_changed }}
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASES_URL: https://portalsurfer.org/plugins/api/v1/products/gainsnap/releases
+          SOURCE_SHA: ${{ steps.source_sha.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          releases_json="${RUNNER_TEMP}/gainsnap-releases.json"
+          curl --fail --silent --show-error --location --max-time 30 "${RELEASES_URL}" > "${releases_json}"
+          python3 - "${SOURCE_SHA}" "${releases_json}" "${GITHUB_OUTPUT}" "${RELEASE_CHANNEL}" <<'PY'
+          import datetime as dt
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          source_sha, releases_path, output_path, channel = sys.argv[1:]
+          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("checked-out source SHA is invalid")
+          try:
+              document = json.loads(Path(releases_path).read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as error:
+              raise SystemExit(f"could not validate public release history: {error}")
+          releases = document.get("releases") if isinstance(document, dict) else None
+          if not isinstance(releases, list):
+              raise SystemExit("release history must contain a releases array")
+          latest = None
+          for release in releases:
+              if not isinstance(release, dict) or release.get("channel") != channel:
+                  continue
+              released_at = release.get("released_at")
+              source = release.get("source")
+              if not isinstance(released_at, str) or not isinstance(source, dict):
+                  raise SystemExit("matching release is missing source or timestamp")
+              if source.get("repository") != "PORTALSURFER/gainsnap":
+                  raise SystemExit("matching release source repository is invalid")
+              try:
+                  parsed = dt.datetime.fromisoformat(released_at.replace("Z", "+00:00"))
+              except ValueError as error:
+                  raise SystemExit(f"matching release timestamp is invalid: {error}")
+              if parsed.tzinfo is None or parsed.utcoffset() is None:
+                  raise SystemExit("matching release timestamp must include a timezone")
+              candidate_sha = source.get("git_sha")
+              if not isinstance(candidate_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+                  raise SystemExit("matching release source SHA is invalid")
+              if latest is None or parsed > latest[0]:
+                  latest = (parsed, candidate_sha)
+          should_release = latest is None or latest[1] != source_sha
+          with Path(output_path).open("a", encoding="utf-8") as output:
+              output.write(f"should_release={str(should_release).lower()}\n")
+          print("nightly freshness decision: " + ("release" if should_release else "no-op"))
+          PY
+      - name: Stop when the selected channel is unchanged
+        if: ${{ inputs.only_if_changed && steps.gate.outputs.should_release != 'true' }}
+        run: echo "selected release channel already contains this source SHA"
+      - name: Install Rust
+        if: ${{ !inputs.only_if_changed || steps.gate.outputs.should_release == 'true' }}
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+      - name: Checkout pinned VST3 SDK
+        if: ${{ !inputs.only_if_changed || steps.gate.outputs.should_release == 'true' }}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/steinbergmedia/vst3sdk.git "$RUNNER_TEMP/vst3sdk"
+          git -C "$RUNNER_TEMP/vst3sdk" fetch --depth 1 origin 58f8da7936800732561402d7936584ca4505de07
+          git -C "$RUNNER_TEMP/vst3sdk" checkout --detach 58f8da7936800732561402d7936584ca4505de07
+          echo "VST3_SDK_DIR=$RUNNER_TEMP/vst3sdk" >> "$GITHUB_ENV"
+      - name: Produce and optionally publish GainSnap release
+        if: ${{ !inputs.only_if_changed || steps.gate.outputs.should_release == 'true' }}
+        env:
+          PORTALSURFER_RELEASE_TOKEN: ${{ inputs.publish && secrets.PORTALSURFER_RELEASE_TOKEN || '' }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.publish }}" == true ]]; then
+            bash scripts/release.sh --publish --channel "${{ inputs.channel }}"
+          else
+            bash scripts/release.sh --package-only --channel "${{ inputs.channel }}"
+          fi
+      - name: Upload immutable package-only artifact
+        if: ${{ !inputs.only_if_changed || steps.gate.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gainsnap-release-${{ inputs.channel }}-${{ steps.source_sha.outputs.sha }}
+          path: dist/releases/*
+          if-no-files-found: error
+          retention-days: 3
+      - name: Reconcile metadata-only GitHub Release
+        if: ${{ (!inputs.only_if_changed || steps.gate.outputs.should_release == 'true') && inputs.publish && inputs.channel != 'nightly' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n '/^\[package\]/,/^\[/ { s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p; }' Cargo.toml | head -n 1)"
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            EXISTING_TARGET="$(gh release view "$TAG" --repo "${{ github.repository }}" --json targetCommitish --jq '.targetCommitish')"
+            [[ "${EXISTING_TARGET}" == "${{ steps.source_sha.outputs.sha }}" ]] || { echo "existing GitHub Release tag resolves to a different source SHA" >&2; exit 1; }
+            if [[ "${{ inputs.channel }}" == rc ]]; then
+              gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+            else
+              gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease=false --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+            fi
+          elif [[ "${{ inputs.channel }}" == rc ]]; then
+            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ steps.source_sha.outputs.sha }}" --prerelease --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ steps.source_sha.outputs.sha }}" --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+          fi
+
+  windows_artifacts:
+    # Windows output is intentionally an Actions artifact only. It is unsigned
+    # and never enters the macOS signing, notarization, or PortalSurfer publish path.
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Capture checked-out source SHA
+        id: source_sha
+        shell: pwsh
+        run: |
+          "sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Checkout pinned VST3 SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sdk = Join-Path $env:RUNNER_TEMP "vst3sdk"
+          git clone --quiet --no-tags https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk fetch --quiet --depth 1 origin 58f8da7936800732561402d7936584ca4505de07
+          git -C $sdk checkout --quiet --detach 58f8da7936800732561402d7936584ca4505de07
+          "VST3_SDK_DIR=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build and audit unsigned Windows CLAP and VST3 artifacts
+        shell: pwsh
+        run: .\scripts\release-windows.ps1 -Channel "${{ inputs.channel }}" -SourceSha "${{ steps.source_sha.outputs.sha }}" -Formats "clap,vst3"
+      - name: Upload unsigned Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gainsnap-release-${{ inputs.channel }}-${{ steps.source_sha.outputs.sha }}-windows-unsigned
+          path: dist/releases/windows/**
+          if-no-files-found: error
+          retention-days: 3

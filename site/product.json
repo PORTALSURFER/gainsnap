@@ -4,8 +4,8 @@
 "slug": "gainsnap",
 "display_name": "GainSnap",
 "category": "Utility",
-"tagline": "One-shot peak matching for Ableton tracks",
-"description": "GainSnap measures an incoming track peak, applies the gain needed to reach a chosen target, and holds that gain when matching is complete.",
+"tagline": "Toggle peak matching for Ableton tracks",
+"description": "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement.",
 "repository": "PORTALSURFER/gainsnap",
 "landing_path": "/plugins/gainsnap/",
 "release_api": "/plugins/api/v1/products/gainsnap/releases"

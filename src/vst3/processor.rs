@@ -16,6 +16,7 @@ use super::shared_state::{
     GainSnapVst3Runtime, GainSnapVst3Shared, ParamEvent, PARAMETER_COUNT, PARAM_EVENT_CAPACITY,
 };
 use super::CONTROLLER_CID;
+use crate::params::GainSnapParams;
 
 /// Exclusive audio-side borrow of Toybox's VST3 runtime owner.
 struct RealtimeRuntime {
@@ -482,19 +483,19 @@ impl IAudioProcessorTrait for GainSnapVst3Processor {
         runtime.engine.begin_block(&self.shared.params);
 
         if frames == 0 {
-            runtime.timeline.apply_remaining(&self.shared.params);
+            apply_remaining_events(runtime, &self.shared.params);
             return process_ok();
         }
 
         if data.symbolicSampleSize != SymbolicSampleSizes_::kSample32 as int32 {
-            runtime.timeline.apply_remaining(&self.shared.params);
+            apply_remaining_events(runtime, &self.shared.params);
             return unsafe { silence_valid_stereo_output(data) };
         }
 
         // SAFETY: raw_stereo_buffers validates all host-owned pointers and
         // channel ranges before any pointer arithmetic occurs.
         let Some(buffers) = (unsafe { raw_stereo_buffers(data) }) else {
-            runtime.timeline.apply_remaining(&self.shared.params);
+            apply_remaining_events(runtime, &self.shared.params);
             return unsafe { silence_valid_stereo_output(data) };
         };
 
@@ -514,7 +515,7 @@ impl IAudioProcessorTrait for GainSnapVst3Processor {
                 ptr::write(buffers.output_right.add(frame), output_right);
             }
         }
-        runtime.timeline.apply_remaining(&self.shared.params);
+        apply_remaining_events(runtime, &self.shared.params);
         let report = runtime.engine.report();
         self.shared.status.update(
             report.input_peak_db,
@@ -538,6 +539,11 @@ impl IAudioProcessorTrait for GainSnapVst3Processor {
     unsafe fn getTailSamples(&self) -> uint32 {
         0
     }
+}
+
+fn apply_remaining_events(runtime: &mut GainSnapVst3Runtime, params: &GainSnapParams) {
+    runtime.timeline.apply_remaining(params);
+    runtime.engine.sync_controls(params);
 }
 
 impl IProcessContextRequirementsTrait for GainSnapVst3Processor {
@@ -629,6 +635,8 @@ fn push_normalized_param_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::PARAM_MATCH;
+    use crate::status::MatchState;
 
     #[test]
     fn stereo_alias_validation_accepts_in_place_and_rejects_cross_aliases() {
@@ -678,5 +686,32 @@ mod tests {
         assert_eq!(unsafe { processor.setProcessing(1) }, kResultOk);
         assert_eq!(processor.publisher.latest_revision(), revision);
         assert!(processor.processing_reset_requested.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn block_end_match_off_is_finalized_before_vst3_return() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut runtime = GainSnapVst3Runtime::new(&params, 1_000.0);
+        runtime.timeline.begin_block(64);
+        runtime.timeline.push(
+            64,
+            ParamEvent {
+                offset: 0,
+                sequence: 0,
+                param_id: PARAM_MATCH,
+                value: 0.0,
+            },
+        );
+        runtime.timeline.prepare();
+        runtime.engine.begin_block(&params);
+        for _ in 0..64 {
+            let _ = runtime.engine.process_frame(&params, 0.25, 0.25);
+        }
+
+        apply_remaining_events(&mut runtime, &params);
+
+        assert_eq!(runtime.engine.report().state, MatchState::Locked);
+        assert!((runtime.engine.report().locked_gain_db - 0.0412).abs() < 0.02);
     }
 }

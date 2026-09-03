@@ -1,10 +1,8 @@
-//! Realtime-safe one-shot peak matching DSP.
+//! Realtime-safe toggle peak matching DSP.
 
 use crate::params::{GainSnapParams, GAIN_MAX_DB, GAIN_MIN_DB};
 use crate::status::MatchState;
 
-/// Conservative measurement window used by the Match control.
-pub const MEASUREMENT_SECONDS: f32 = 0.5;
 /// Time used to slew a newly calculated gain into the audio path.
 pub const GAIN_SMOOTHING_SECONDS: f32 = 0.01;
 /// Peak below this threshold is treated as no usable signal.
@@ -18,6 +16,10 @@ pub struct EngineReport {
     /// Highest finite output sample generated in the block, in dBFS.
     pub output_peak_db: f32,
     /// Measurement progress from zero to one.
+    ///
+    /// An active measurement has no predetermined completion point, so this
+    /// remains zero until the Match toggle is turned off and the result is
+    /// finalized.
     pub progress: f32,
     /// Current matcher state.
     pub state: MatchState,
@@ -27,9 +29,7 @@ pub struct EngineReport {
 
 /// Per-instance, audio-thread-owned matcher and gain smoother.
 pub struct GainSnapEngine {
-    measurement_frames: usize,
     smoothing_coefficient: f32,
-    measurement_frames_seen: usize,
     measurement_peak: f32,
     block_input_peak: f32,
     block_output_peak: f32,
@@ -49,14 +49,11 @@ impl GainSnapEngine {
         } else {
             48_000.0
         };
-        let measurement_frames = (sample_rate * MEASUREMENT_SECONDS).ceil().max(1.0) as usize;
         let smoothing_coefficient = 1.0 - (-1.0 / (sample_rate * GAIN_SMOOTHING_SECONDS)).exp();
         let locked_gain_db = sanitize_gain_db(stored_gain_db);
         let gain = db_to_linear(locked_gain_db);
         Self {
-            measurement_frames,
             smoothing_coefficient: smoothing_coefficient.clamp(0.0001, 1.0),
-            measurement_frames_seen: 0,
             measurement_peak: 0.0,
             block_input_peak: 0.0,
             block_output_peak: 0.0,
@@ -79,7 +76,6 @@ impl GainSnapEngine {
     /// Reset transient measurement state at a host processing boundary.
     #[cfg(feature = "vst3")]
     pub fn reset(&mut self, params: &GainSnapParams) {
-        self.measurement_frames_seen = 0;
         self.measurement_peak = 0.0;
         self.block_input_peak = 0.0;
         self.block_output_peak = 0.0;
@@ -94,16 +90,15 @@ impl GainSnapEngine {
     /// Apply control changes after a sample-offset parameter event.
     pub fn sync_controls(&mut self, params: &GainSnapParams) {
         let request = params.match_requested();
+        let mut measurement_finished = false;
 
         if !request {
-            if self.state == MatchState::Measuring {
-                self.state = MatchState::Ready;
-                self.measurement_frames_seen = 0;
-                self.measurement_peak = 0.0;
+            if self.previous_match_request && self.state == MatchState::Measuring {
+                self.finish_measurement(params);
+                measurement_finished = true;
             }
             self.previous_match_request = false;
         } else if !self.previous_match_request {
-            self.measurement_frames_seen = 0;
             self.measurement_peak = 0.0;
             self.measurement_target_db = params.target_db();
             self.state = MatchState::Measuring;
@@ -111,7 +106,8 @@ impl GainSnapEngine {
         }
 
         let stored_gain_db = params.locked_gain_db();
-        if self.state != MatchState::Measuring
+        if !measurement_finished
+            && self.state != MatchState::Measuring
             && (stored_gain_db - self.locked_gain_db).abs() > 0.0001
         {
             self.locked_gain_db = stored_gain_db;
@@ -123,7 +119,7 @@ impl GainSnapEngine {
     /// Process one stereo frame without allocating, locking, or blocking.
     pub fn process_frame(
         &mut self,
-        params: &GainSnapParams,
+        _params: &GainSnapParams,
         input_left: f32,
         input_right: f32,
     ) -> (f32, f32) {
@@ -134,10 +130,6 @@ impl GainSnapEngine {
 
         if self.state == MatchState::Measuring {
             self.measurement_peak = self.measurement_peak.max(input_peak);
-            self.measurement_frames_seen = self.measurement_frames_seen.saturating_add(1);
-            if self.measurement_frames_seen >= self.measurement_frames {
-                self.finish_measurement(params);
-            }
         }
 
         self.current_gain += (self.target_gain - self.current_gain) * self.smoothing_coefficient;
@@ -156,8 +148,8 @@ impl GainSnapEngine {
 
     /// Return this block's metering and matcher state.
     pub fn report(&self) -> EngineReport {
-        let progress = if self.state == MatchState::Measuring {
-            self.measurement_frames_seen as f32 / self.measurement_frames as f32
+        let progress: f32 = if self.state == MatchState::Measuring {
+            0.0
         } else {
             1.0
         };
@@ -173,7 +165,6 @@ impl GainSnapEngine {
     fn finish_measurement(&mut self, params: &GainSnapParams) {
         if self.measurement_peak < SILENCE_PEAK_LINEAR {
             self.state = MatchState::NoSignal;
-            self.measurement_frames_seen = self.measurement_frames;
             return;
         }
         let measured_db = linear_to_db(self.measurement_peak);
@@ -182,7 +173,6 @@ impl GainSnapEngine {
         self.target_gain = db_to_linear(self.locked_gain_db);
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, self.locked_gain_db);
         self.state = MatchState::Locked;
-        self.measurement_frames_seen = self.measurement_frames;
     }
 }
 
@@ -232,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn calculates_gain_from_peak_and_holds_it() {
+    fn turning_match_off_calculates_gain_and_holds_it() {
         let params = GainSnapParams::new();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
@@ -240,34 +230,63 @@ mod tests {
         engine.begin_block(&params);
         run_frames(&mut engine, &params, 0.5, 500);
 
+        assert_eq!(engine.report().state, MatchState::Measuring);
+        assert_eq!(engine.report().progress, 0.0);
+        assert!((engine.report().locked_gain_db - 0.0).abs() < 0.001);
+
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
         let report = engine.report();
         assert_eq!(report.state, MatchState::Locked);
         assert!((report.locked_gain_db - (-5.9794)).abs() < 0.02);
         assert!((params.locked_gain_db() - report.locked_gain_db).abs() < 0.001);
 
-        params.set_param(PARAM_MATCH, 0.0);
-        engine.begin_block(&params);
         run_frames(&mut engine, &params, 0.25, 200);
         assert_eq!(engine.report().state, MatchState::Locked);
         assert!((engine.report().locked_gain_db - (-5.9794)).abs() < 0.02);
     }
 
     #[test]
-    fn match_is_edge_triggered_and_low_cancels_pending_measurement() {
+    fn extended_measurement_keeps_later_peak_until_toggle_off() {
         let params = GainSnapParams::new();
+        params.set_param(PARAM_TARGET_DB, -12.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.25, 100);
+        run_frames(&mut engine, &params, 0.25, 500);
+        assert_eq!(engine.report().state, MatchState::Measuring);
+
+        // The peak arrives after the old fixed 0.5 second window. It must
+        // still participate in the result while Match remains enabled.
+        run_frames(&mut engine, &params, 0.5, 2_000);
+        assert_eq!(engine.report().state, MatchState::Measuring);
+
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
-        assert_eq!(engine.report().state, MatchState::Ready);
-        run_frames(&mut engine, &params, 0.9, 500);
-        assert_eq!(engine.report().state, MatchState::Ready);
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - (-5.9794)).abs() < 0.02);
+    }
+
+    #[test]
+    fn turning_match_on_again_starts_a_fresh_measurement() {
+        let params = GainSnapParams::new();
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+
         params.set_param(PARAM_MATCH, 1.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.25, 500);
+        run_frames(&mut engine, &params, 0.5, 100);
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::Locked);
+
+        params.set_param(PARAM_MATCH, 1.0);
+        engine.begin_block(&params);
+        run_frames(&mut engine, &params, 0.25, 100);
+        assert_eq!(engine.report().state, MatchState::Measuring);
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
     }
 
     #[test]
@@ -276,7 +295,10 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 3.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.0, 500);
+        run_frames(&mut engine, &params, 0.0, 10_000);
+        assert_eq!(engine.report().state, MatchState::Measuring);
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::NoSignal);
         assert!((engine.report().locked_gain_db - 3.0).abs() < 0.001);
     }

@@ -2,7 +2,9 @@
 
 ## Summary
 
-GainSnap measures an incoming track peak, applies the gain needed to reach a chosen target, and holds that gain when matching is complete.
+GainSnap measures an incoming track peak while Match is enabled, applies the
+gain needed to reach a chosen target when Match is disabled, and holds that
+gain until the next measurement.
 
 ## Constraints
 

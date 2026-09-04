@@ -5,7 +5,7 @@
 "category": "Utility",
 "summary": "Toggle peak matching for Ableton tracks",
 "description": "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange incoming peak with a dB scale. A small triangle beside the meter marks the target and acts as the target control.",
-"features": ["Native macOS audio processing", "One-click 0 dBFS normalization", "Smoothed realtime orange peak meter with dB scale", "Toybox-based host and GUI integration", "Reproducible CLAP and VST3 release automation"],
+"features": ["Native macOS audio processing", "One-click 0 dBFS normalization", "Smoothed realtime orange peak meter with dB scale", "Toybox-based host and GUI integration", "Signed macOS CLAP and VST3 releases", "Public unsigned Windows x86_64 VST3 nightlies in schema-3 manifests"],
 "formats": ["CLAP", "VST3"],
 "hero": null,
 "donation": {
@@ -21,7 +21,7 @@
 },
 "downloads": {
 "state": "active",
-"pending_message": "No signed release is published yet."
+"pending_message": "No production release is published yet. Public nightlies publish an unsigned Windows x86_64 VST3 alongside signed macOS CLAP and VST3 artifacts in schema-3 manifests."
 },
 "chat": {"enabled": false}
 }

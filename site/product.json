@@ -14,8 +14,44 @@
 "platform": "macos",
 "architectures": ["arm64"],
 "formats": ["clap", "vst3"],
-"channels": ["stable", "nightly"],
-"release_manifest_schema": 2
+"channels": ["stable", "rc", "nightly"],
+"release_manifest_schema": 3,
+"release_profile": {
+"apple_team_id": "DKTKQ8U5T8",
+"artifact_targets": [
+{
+"format": "clap",
+"platform": "macos",
+"architectures": ["arm64"],
+"name_template": "gainsnap-v{version}-macos.clap.zip"
+},
+{
+"format": "vst3",
+"platform": "macos",
+"architectures": ["arm64"],
+"name_template": "gainsnap-v{version}-macos.vst3.zip"
+},
+{
+"format": "vst3",
+"platform": "windows",
+"architectures": ["x86_64"],
+"name_template": "gainsnap-v{version}-windows-x86_64-unsigned.vst3.zip"
+}
+],
+"attestation_policy": {
+"issuer": "https://token.actions.githubusercontent.com",
+"repository": "PORTALSURFER/gainsnap",
+"repository_id": "1356161501",
+"repository_owner_id": "41680373",
+"ref": "refs/heads/main",
+"ref_type": "branch",
+"ref_protected": "true",
+"workflow_ref": "PORTALSURFER/gainsnap/.github/workflows/release.yml@refs/heads/main",
+"environment": "production",
+"event_name": "workflow_dispatch",
+"runner_environment": "github-hosted"
+}
+}
 },
 "artwork": {
 "hero_screenshot": "/plugins/gainsnap/assets/gainsnap-default-300x320.png",

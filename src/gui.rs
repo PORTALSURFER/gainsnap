@@ -18,7 +18,7 @@ use radiant::runtime::{PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStr
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, SliderMessage,
-    TextInputMessage, WidgetCapabilities, WidgetId, WidgetSemantics,
+    TextInputMessage, WidgetCapabilities, WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -1015,7 +1015,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
             "MATCH",
             state.params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
         )
-        .primary()
+        .style(WidgetStyle::normal(WidgetTone::Accent))
         .message(|checked| EditorMessage::Toggle {
             id: PARAM_MATCH,
             checked,
@@ -1370,6 +1370,66 @@ mod tests {
         assert!(!plan.contains_text("NORMALIZE"));
         assert!(!plan.contains_text("dBFS"));
         assert!(!plan.contains_text("Ready — target"));
+    }
+
+    #[test]
+    fn match_toggle_uses_distinct_off_and_on_visual_tokens() {
+        let theme = ThemeTokens::default();
+
+        let mut off_state = editor_state();
+        let off_plan = project_surface(&mut off_state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &theme,
+            )
+            .paint_plan;
+        let off_label = off_plan
+            .first_text_run("MATCH")
+            .expect("off match label should be painted");
+        let off_fill = off_plan
+            .fill_rects_for_widget(off_label.widget_id)
+            .find(|fill| {
+                (fill.rect.width() - MATCH_BUTTON_WIDTH).abs() < f32::EPSILON
+                    && (fill.rect.height() - MATCH_BUTTON_HEIGHT).abs() < f32::EPSILON
+            })
+            .expect("off match button should paint its fill");
+        let off_bounds = off_plan
+            .first_widget_rect(off_label.widget_id)
+            .expect("off match button should paint a rectangular control");
+
+        let mut on_state = editor_state();
+        on_state.params.set_param(PARAM_MATCH, 1.0);
+        let on_plan = project_surface(&mut on_state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &theme,
+            )
+            .paint_plan;
+        let on_label = on_plan
+            .first_text_run("MATCH")
+            .expect("on match label should be painted");
+        let on_fill = on_plan
+            .fill_rects_for_widget(on_label.widget_id)
+            .find(|fill| {
+                (fill.rect.width() - MATCH_BUTTON_WIDTH).abs() < f32::EPSILON
+                    && (fill.rect.height() - MATCH_BUTTON_HEIGHT).abs() < f32::EPSILON
+            })
+            .expect("on match button should paint its fill");
+        let on_bounds = on_plan
+            .first_widget_rect(on_label.widget_id)
+            .expect("on match button should paint a rectangular control");
+
+        assert_eq!(off_label.text.as_str(), "MATCH");
+        assert_eq!(on_label.text.as_str(), "MATCH");
+        assert_eq!(off_fill.color, theme.surface_raised);
+        assert_eq!(off_label.color, theme.accent_mint);
+        assert_eq!(on_fill.color, theme.accent_mint);
+        assert_eq!(on_label.color, theme.text_primary);
+        assert_ne!(off_fill.color, on_fill.color);
+        assert_ne!(off_label.color, on_label.color);
+        assert_eq!(off_bounds, on_bounds);
+        assert_eq!(off_bounds.width(), MATCH_BUTTON_WIDTH);
+        assert_eq!(off_bounds.height(), MATCH_BUTTON_HEIGHT);
     }
 
     #[test]
@@ -1735,6 +1795,47 @@ mod tests {
         params.set_param(PARAM_TARGET_DB, -6.5);
         assert!(editor.needs_realtime_redraw());
         editor.paint_plan();
+        assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn editor_repaints_when_host_changes_match_parameter() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let status = Arc::new(GuiStatus::default());
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            status,
+            None,
+            None,
+        );
+        let theme = ThemeTokens::default();
+
+        let match_fill_color = |plan: &SurfacePaintPlan| {
+            let label = plan
+                .first_text_run("MATCH")
+                .expect("match label should be painted");
+            plan.fill_rects_for_widget(label.widget_id)
+                .find(|fill| {
+                    (fill.rect.width() - MATCH_BUTTON_WIDTH).abs() < f32::EPSILON
+                        && (fill.rect.height() - MATCH_BUTTON_HEIGHT).abs() < f32::EPSILON
+                })
+                .expect("match button should paint its fill")
+                .color
+        };
+
+        assert!(!editor.needs_realtime_redraw());
+        assert_eq!(match_fill_color(editor.paint_plan()), theme.surface_raised);
+        assert!(!editor.needs_realtime_redraw());
+
+        params.set_param(PARAM_MATCH, 1.0);
+        assert!(editor.needs_realtime_redraw());
+        assert_eq!(match_fill_color(editor.paint_plan()), theme.accent_mint);
+        assert!(!editor.needs_realtime_redraw());
+
+        params.set_param(PARAM_MATCH, 0.0);
+        assert!(editor.needs_realtime_redraw());
+        assert_eq!(match_fill_color(editor.paint_plan()), theme.surface_raised);
         assert!(!editor.needs_realtime_redraw());
     }
 }

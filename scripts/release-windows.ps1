@@ -100,8 +100,7 @@ function Normalize-ZipTimestamps {
 
 function New-Archive {
     param(
-        [Parameter(Mandatory = $true)] [string] $SourcePath,
-        [Parameter(Mandatory = $true)] [bool] $SourceIsDirectory,
+        [Parameter(Mandatory = $true)] [string] $SourceFile,
         [Parameter(Mandatory = $true)] [string] $ArchivePath,
         [Parameter(Mandatory = $true)] [string] $ExpectedFile
     )
@@ -111,14 +110,13 @@ function New-Archive {
     $stageRoot = Join-Path $stageParent ("windows-package-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $stageRoot | Out-Null
     try {
-        if ($SourceIsDirectory) {
-            $stagePath = Join-Path $stageRoot (Split-Path -Leaf $SourcePath)
-            Copy-Item -LiteralPath $SourcePath -Destination $stagePath -Recurse
+        if (-not (Test-Path -LiteralPath $SourceFile -PathType Leaf)) {
+            throw "archive source must be a file: $SourceFile"
         }
-        else {
-            $stagePath = Join-Path $stageRoot (Split-Path -Leaf $SourcePath)
-            Copy-Item -LiteralPath $SourcePath -Destination $stagePath
-        }
+        $stagePath = Join-Path $stageRoot ($ExpectedFile -replace "/", "\")
+        $stageFileParent = Split-Path -Parent $stagePath
+        New-Item -ItemType Directory -Path $stageFileParent -Force | Out-Null
+        Copy-Item -LiteralPath $SourceFile -Destination $stagePath
 
         if (Test-Path -LiteralPath $ArchivePath) {
             throw "refusing to overwrite existing archive: $ArchivePath"
@@ -281,8 +279,7 @@ foreach ($format in $requestedFormats) {
         "$bundleStem.clap"
     }
     New-Archive `
-        -SourcePath $bundlePath `
-        -SourceIsDirectory ($format -eq "vst3") `
+        -SourceFile $binaryPath `
         -ArchivePath $archivePath `
         -ExpectedFile $expectedMember
 }

@@ -14,5 +14,5 @@ control.
 
 - Keep audio processing realtime-safe: no allocation, blocking, or secret handling in the audio callback.
 - Keep this repository thin; shared GUI/host mechanics belong in Toybox.
-- Windows release artifacts are unsigned, are emitted only by GitHub Actions, and must not enter the macOS signing/notarization or public PortalSurfer publication path.
+- Windows release artifacts are unsigned, are emitted only by GitHub Actions, and are validated as the public Windows sidecar of production nightly schema-3 manifests; they never receive Apple signing/notary credentials or enter the macOS signing path.
 - Landing-page content is generated from site/landing-page.json and registered through the staged CLI.

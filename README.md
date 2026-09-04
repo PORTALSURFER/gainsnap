@@ -30,13 +30,15 @@ VST3_SDK_DIR=/path/to/vst3sdk bash scripts/ci.sh --vst3
 bash scripts/dist.sh --format clap
              VST3_SDK_DIR=/path/to/vst3sdk bash scripts/dist.sh
 
-GitHub Actions release workflows also build an x86_64 Windows artifact for
-every declared format. Windows artifacts are intentionally unsigned and remain
-Actions artifacts; their archive names include `windows-unsigned`. To reproduce
-the package lane on Windows, use `pwsh scripts/release-windows.ps1 -Channel
-nightly -SourceSha (git rev-parse HEAD) -Formats "clap,vst3"` with `VST3_SDK_DIR`
-set to a pinned SDK checkout. The script audits the installable CLAP file or
-VST3 bundle before returning.
+GitHub Actions release workflows publish signed, notarized, and stapled macOS
+arm64 CLAP/VST3 releases. Public production nightlies additionally contain an
+unsigned Windows x86_64 VST3 in one immutable schema-3 manifest. The exact
+Windows archive is
+`gainsnap-v<publication-version>-windows-x86_64-unsigned.vst3.zip`; stable and
+RC releases remain macOS-only schema-2 releases. The reusable Windows workflow
+and `scripts/windows_release_helper.py` validate the bundle layout, PE
+architecture, absence of Authenticode signing, dependency pins, and shared
+release identity. Windows receives no Apple or PortalSurfer credentials.
 
 ## Staged bootstrap
 

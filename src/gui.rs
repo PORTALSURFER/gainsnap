@@ -14,11 +14,14 @@ use radiant::prelude::{
     WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
-use radiant::runtime::{PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStrokeRect};
+use radiant::runtime::{
+    PaintFillPolygon, PaintFillRect, PaintPrimitive, PaintStrokePolygon, PaintStrokeRect,
+};
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
-    ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, SliderMessage,
-    TextInputMessage, WidgetCapabilities, WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
+    ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, PointerCapturePolicy,
+    SliderMessage, TextInputMessage, WidgetCapabilities, WidgetId, WidgetSemantics, WidgetStyle,
+    WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -45,7 +48,7 @@ const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
 // caret. Keep enough room for the longest formatted target (for example,
 // `-12.0`) to remain visible while it is being edited.
 const TARGET_CONTROL_WIDTH: f32 = 68.0;
-const TARGET_SLIDER_HEIGHT: f32 = 176.0;
+const TARGET_METER_HEIGHT: f32 = 176.0;
 const TARGET_ENTRY_HEIGHT: f32 = 28.0;
 const TARGET_CONTROL_SPACING: f32 = 8.0;
 const ACTION_CONTROL_WIDTH: f32 = 112.0;
@@ -56,16 +59,18 @@ const MATCH_BUTTON_HEIGHT: f32 = 38.0;
 const NORMALIZE_BUTTON_WIDTH: f32 = 40.0;
 const NORMALIZE_BUTTON_HEIGHT: f32 = 22.0;
 const STATUS_INDICATOR_SIZE: f32 = 12.0;
-const VERTICAL_SLIDER_TRACK_WIDTH: f32 = 6.0;
-const VERTICAL_SLIDER_THUMB_HEIGHT: f32 = 6.0;
-const VERTICAL_SLIDER_MARKER_GAP: f32 = 2.0;
-const VERTICAL_SLIDER_MARKER_WIDTH: f32 = 8.0;
-const VERTICAL_SLIDER_MARKER_HEIGHT: f32 = 3.0;
-const VERTICAL_SLIDER_TICK_COUNT: usize = 13;
-const VERTICAL_SLIDER_TICK_WIDTH: f32 = 4.0;
-const VERTICAL_SLIDER_TICK_HEIGHT: f32 = 1.0;
-const VERTICAL_SLIDER_KEYBOARD_STEP_DB: f32 = 1.0;
-const VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
+const TARGET_METER_TRACK_WIDTH: f32 = 14.0;
+const TARGET_METER_COLUMN_WIDTH: f32 = 6.0;
+const TARGET_METER_COLUMN_GAP: f32 = 2.0;
+const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
+const TARGET_METER_TICK_COUNT: usize = 13;
+const TARGET_METER_TICK_WIDTH: f32 = 4.0;
+const TARGET_METER_TICK_HEIGHT: f32 = 1.0;
+const TARGET_MARKER_GAP: f32 = 5.0;
+const TARGET_MARKER_WIDTH: f32 = 8.0;
+const TARGET_MARKER_HEIGHT: f32 = 8.0;
+const TARGET_KEYBOARD_STEP_DB: f32 = 1.0;
+const TARGET_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
 const SURFACE_PADDING_X: f32 = 32.0;
 const SURFACE_COLUMN_GAP: f32 = 32.0;
 
@@ -279,12 +284,12 @@ impl Widget for NormalizeButtonWidget {
     }
 }
 
-/// Compact vertical target control used because the pinned Radiant slider is
-/// intentionally horizontal. It keeps the built-in slider's normalized value,
-/// pointer, keyboard, focus, and automation behavior while painting a narrow
-/// vertical bar for the small GainSnap editor.
+/// Compact target control that combines a realtime input/output meter with a
+/// draggable target marker. The full widget bounds are an intentionally wider
+/// invisible rail, so the small marker remains easy to grab without changing
+/// the visual proportions of the editor.
 #[derive(Clone, Debug, PartialEq)]
-struct VerticalSlider {
+struct TargetMeter {
     common: WidgetCommon,
     value: f32,
     shift_held: bool,
@@ -292,11 +297,16 @@ struct VerticalSlider {
     output_peak_db: f32,
 }
 
-impl VerticalSlider {
+impl TargetMeter {
     fn new(value: f32) -> Self {
-        let mut common = WidgetCommon::new(0, WidgetSizing::fixed(Vector2::new(28.0, 140.0)));
+        let mut common = WidgetCommon::new(
+            0,
+            WidgetSizing::fixed(Vector2::new(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT)),
+        );
         common.focus = FocusBehavior::Keyboard;
         common.paint.bounds = PaintBounds::ClipToRect;
+        common.paint.paints_focus = false;
+        common.paint.paints_state_layers = false;
         Self {
             common,
             value: clamp_fraction(value),
@@ -318,10 +328,7 @@ impl VerticalSlider {
     }
 
     fn value_for_position(bounds: Rect, position: Point) -> f32 {
-        if !bounds.has_finite_positive_area() {
-            return 0.0;
-        }
-        clamp_fraction(1.0 - (position.y - bounds.min.y) / bounds.height())
+        target_value_for_position(bounds, position)
     }
 
     fn set_value(&mut self, value: f32) -> Option<SliderMessage> {
@@ -345,7 +352,7 @@ impl VerticalSlider {
     }
 }
 
-impl WidgetSemantics for VerticalSlider {
+impl WidgetSemantics for TargetMeter {
     fn automation_role(&self) -> AutomationRole {
         AutomationRole::Slider
     }
@@ -363,7 +370,7 @@ impl WidgetSemantics for VerticalSlider {
     }
 }
 
-impl Widget for VerticalSlider {
+impl Widget for TargetMeter {
     fn common(&self) -> &WidgetCommon {
         &self.common
     }
@@ -407,12 +414,18 @@ impl Widget for VerticalSlider {
             } => {
                 let was_pressed = self.common.state.pressed;
                 self.common.state.pressed = false;
-                was_pressed
-                    .then(|| self.pointer_value(bounds, position))
-                    .flatten()
+                if was_pressed {
+                    self.common.state.hovered = bounds.contains(position);
+                    self.pointer_value(bounds, position)
+                } else {
+                    None
+                }
             }
             WidgetInput::FocusChanged(focused) => {
                 self.common.state.focused = focused;
+                if !focused {
+                    self.common.state.pressed = false;
+                }
                 None
             }
             WidgetInput::PointerModifiersChanged { modifiers } => {
@@ -440,6 +453,14 @@ impl Widget for VerticalSlider {
         }
     }
 
+    fn accepts_pointer_move(&self) -> bool {
+        true
+    }
+
+    fn pointer_capture_policy(&self) -> PointerCapturePolicy {
+        PointerCapturePolicy::Exclusive
+    }
+
     fn capabilities(&self) -> WidgetCapabilities<'_> {
         WidgetCapabilities::new().semantics(self)
     }
@@ -454,126 +475,92 @@ impl Widget for VerticalSlider {
         if !bounds.has_finite_positive_area() {
             return;
         }
-        let track = vertical_slider_track(bounds);
+        let track = target_meter_track(bounds);
         let tokens = radiant::widgets::resolve_widget_visual_tokens(
             theme,
             self.common.style,
             self.common.state,
         );
-        let frame = Rect::from_min_max(
-            Point::new(bounds.min.x + 0.5, bounds.min.y + 0.5),
-            Point::new(bounds.max.x - 0.5, bounds.max.y - 0.5),
-        );
-        primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
-            widget_id: self.common.id,
-            rect: frame,
-            color: theme.border,
-            width: 1.0,
-        }));
-        let tick_color = theme.grid_strong;
-        for index in 0..VERTICAL_SLIDER_TICK_COUNT {
-            let fraction = index as f32 / (VERTICAL_SLIDER_TICK_COUNT - 1) as f32;
-            let y = bounds.min.y + (1.0 - fraction) * bounds.height();
-            let tick_y = (y - VERTICAL_SLIDER_TICK_HEIGHT * 0.5)
-                .clamp(bounds.min.y, bounds.max.y - VERTICAL_SLIDER_TICK_HEIGHT);
-            let tick_width = if index % 2 == 0 {
-                VERTICAL_SLIDER_TICK_WIDTH
-            } else {
-                VERTICAL_SLIDER_TICK_WIDTH - 1.0
-            };
-            primitives.push(PaintPrimitive::FillRect(PaintFillRect {
-                widget_id: self.common.id,
-                rect: Rect::from_min_max(
-                    Point::new(bounds.min.x + 5.0, tick_y),
-                    Point::new(
-                        bounds.min.x + 5.0 + tick_width,
-                        tick_y + VERTICAL_SLIDER_TICK_HEIGHT,
-                    ),
-                ),
-                color: tick_color,
-            }));
-            primitives.push(PaintPrimitive::FillRect(PaintFillRect {
-                widget_id: self.common.id,
-                rect: Rect::from_min_max(
-                    Point::new(bounds.max.x - 5.0 - tick_width, tick_y),
-                    Point::new(bounds.max.x - 5.0, tick_y + VERTICAL_SLIDER_TICK_HEIGHT),
-                ),
-                color: tick_color,
-            }));
-        }
+
+        // The meter itself is deliberately narrow, while the widget bounds
+        // remain wide enough to act as an invisible target-selection rail.
         primitives.push(PaintPrimitive::FillRect(PaintFillRect {
             widget_id: self.common.id,
             rect: track,
             color: theme.bg_primary,
         }));
-        let fill_height = track.height() * self.value.clamp(0.0, 1.0);
-        primitives.push(PaintPrimitive::FillRect(PaintFillRect {
-            widget_id: self.common.id,
-            rect: Rect::from_min_max(
-                Point::new(track.min.x, track.max.y - fill_height),
-                track.max,
-            ),
-            color: tokens.emphasis,
-        }));
-        push_peak_marker(
+
+        let tick_color = theme.grid_strong;
+        for index in 0..TARGET_METER_TICK_COUNT {
+            let fraction = index as f32 / (TARGET_METER_TICK_COUNT - 1) as f32;
+            let y = track.min.y + (1.0 - fraction) * track.height();
+            let tick_y = (y - TARGET_METER_TICK_HEIGHT * 0.5)
+                .clamp(track.min.y, track.max.y - TARGET_METER_TICK_HEIGHT);
+            let tick_width = if index % 2 == 0 {
+                TARGET_METER_TICK_WIDTH
+            } else {
+                TARGET_METER_TICK_WIDTH - 1.0
+            };
+            primitives.push(PaintPrimitive::FillRect(PaintFillRect {
+                widget_id: self.common.id,
+                rect: Rect::from_min_max(
+                    Point::new(track.min.x - TARGET_MARKER_GAP - tick_width, tick_y),
+                    Point::new(
+                        track.min.x - TARGET_MARKER_GAP,
+                        tick_y + TARGET_METER_TICK_HEIGHT,
+                    ),
+                ),
+                color: tick_color,
+            }));
+        }
+
+        let (input_track, output_track) = meter_columns(track);
+        push_meter_level(
             primitives,
             self.common.id,
-            bounds,
-            track,
+            input_track,
             self.input_peak_db,
-            PeakMarkerSide::Left,
             theme.highlight_orange,
         );
-        push_peak_marker(
+        push_meter_level(
             primitives,
             self.common.id,
-            bounds,
-            track,
+            output_track,
             self.output_peak_db,
-            PeakMarkerSide::Right,
             theme.highlight_cyan,
         );
-        let thumb_height = VERTICAL_SLIDER_THUMB_HEIGHT.min(track.height());
-        let thumb_y = track.max.y
-            - self.value.clamp(0.0, 1.0) * (track.height() - thumb_height)
-            - thumb_height;
-        primitives.push(PaintPrimitive::FillRect(PaintFillRect {
-            widget_id: self.common.id,
-            rect: Rect::from_min_max(
-                Point::new(track.min.x - 4.0, thumb_y),
-                Point::new(track.max.x + 4.0, thumb_y + thumb_height),
-            ),
-            color: theme.text_primary,
-        }));
         primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
             widget_id: self.common.id,
             rect: track,
-            color: theme.grid_strong,
+            color: theme.border,
             width: 1.0,
         }));
-        if self.common.state.focused && self.common.paint.paints_focus {
-            primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
+
+        if let Some(points) = target_marker_points(track, TARGET_RANGE.denormalize(self.value)) {
+            primitives.push(PaintPrimitive::FillPolygon(PaintFillPolygon {
                 widget_id: self.common.id,
-                rect: bounds,
-                color: tokens.emphasis,
-                width: 1.0,
+                points: points.clone(),
+                color: theme.text_primary,
             }));
+            if self.common.state.focused {
+                primitives.push(PaintPrimitive::StrokePolygon(PaintStrokePolygon {
+                    widget_id: self.common.id,
+                    points,
+                    color: tokens.emphasis,
+                    width: 1.0,
+                }));
+            }
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PeakMarkerSide {
-    Left,
-    Right,
-}
-
-fn vertical_slider_track(bounds: Rect) -> Rect {
-    let track_width = VERTICAL_SLIDER_TRACK_WIDTH.min(bounds.width());
+fn target_meter_track(bounds: Rect) -> Rect {
+    let track_width = TARGET_METER_TRACK_WIDTH.min(bounds.width());
     let track_x = bounds.min.x + (bounds.width() - track_width) * 0.5;
+    let vertical_inset = TARGET_METER_VERTICAL_INSET.min(bounds.height() * 0.5);
     Rect::from_min_max(
-        Point::new(track_x, bounds.min.y),
-        Point::new(track_x + track_width, bounds.max.y),
+        Point::new(track_x, bounds.min.y + vertical_inset),
+        Point::new(track_x + track_width, bounds.max.y - vertical_inset),
     )
 }
 
@@ -585,54 +572,81 @@ fn target_level_fraction(db: f32) -> f32 {
     }
 }
 
-fn marker_center_y(track: Rect, db: f32) -> f32 {
-    let thumb_height = VERTICAL_SLIDER_THUMB_HEIGHT.min(track.height());
-    let travel = (track.height() - thumb_height).max(0.0);
-    track.max.y - (thumb_height * 0.5) - (target_level_fraction(db) * travel)
+fn target_value_for_position(bounds: Rect, position: Point) -> f32 {
+    let track = target_meter_track(bounds);
+    if !track.has_finite_positive_area() {
+        return 0.0;
+    }
+    clamp_fraction(1.0 - (position.y - track.min.y) / track.height())
 }
 
-fn peak_marker_rect(bounds: Rect, track: Rect, db: f32, side: PeakMarkerSide) -> Option<Rect> {
-    let marker_width = (((bounds.width() - track.width()) * 0.5) - VERTICAL_SLIDER_MARKER_GAP)
-        .clamp(0.0, VERTICAL_SLIDER_MARKER_WIDTH);
-    let marker_height = VERTICAL_SLIDER_MARKER_HEIGHT
-        .min(bounds.height())
-        .min(track.height());
-    if marker_width <= 0.0 || marker_height <= 0.0 {
+fn meter_columns(track: Rect) -> (Rect, Rect) {
+    let column_width =
+        TARGET_METER_COLUMN_WIDTH.min((track.width() - TARGET_METER_COLUMN_GAP).max(0.0) * 0.5);
+    let input = Rect::from_min_max(
+        track.min,
+        Point::new(track.min.x + column_width, track.max.y),
+    );
+    let output = Rect::from_min_max(
+        Point::new(track.max.x - column_width, track.min.y),
+        track.max,
+    );
+    (input, output)
+}
+
+fn meter_level_rect(track: Rect, db: f32) -> Option<Rect> {
+    if !track.has_finite_positive_area() {
         return None;
     }
-
-    let y = (marker_center_y(track, db) - marker_height * 0.5)
-        .clamp(bounds.min.y, bounds.max.y - marker_height);
-    let (min_x, max_x) = match side {
-        PeakMarkerSide::Left => (
-            track.min.x - VERTICAL_SLIDER_MARKER_GAP - marker_width,
-            track.min.x - VERTICAL_SLIDER_MARKER_GAP,
-        ),
-        PeakMarkerSide::Right => (
-            track.max.x + VERTICAL_SLIDER_MARKER_GAP,
-            track.max.x + VERTICAL_SLIDER_MARKER_GAP + marker_width,
-        ),
-    };
-    let rect = Rect::from_min_max(Point::new(min_x, y), Point::new(max_x, y + marker_height));
-    rect.has_finite_positive_area().then_some(rect)
+    let height = track.height() * target_level_fraction(db);
+    (height > 0.0)
+        .then(|| Rect::from_min_max(Point::new(track.min.x, track.max.y - height), track.max))
 }
 
-fn push_peak_marker(
+fn push_meter_level(
     primitives: &mut Vec<PaintPrimitive>,
     widget_id: WidgetId,
-    bounds: Rect,
     track: Rect,
     db: f32,
-    side: PeakMarkerSide,
     color: Rgba8,
 ) {
-    if let Some(rect) = peak_marker_rect(bounds, track, db, side) {
+    if let Some(rect) = meter_level_rect(track, db) {
         primitives.push(PaintPrimitive::FillRect(PaintFillRect {
             widget_id,
             rect,
             color,
         }));
     }
+}
+
+fn target_marker_rect(track: Rect, db: f32) -> Option<Rect> {
+    if !track.has_finite_positive_area() {
+        return None;
+    }
+    let marker_width = TARGET_MARKER_WIDTH;
+    let marker_height = TARGET_MARKER_HEIGHT.min(track.height());
+    if marker_height <= 0.0 {
+        return None;
+    }
+    let center_y = track.max.y
+        - marker_height * 0.5
+        - target_level_fraction(db) * (track.height() - marker_height);
+    let marker_x = track.max.x + TARGET_MARKER_GAP;
+    let rect = Rect::from_min_max(
+        Point::new(marker_x, center_y - marker_height * 0.5),
+        Point::new(marker_x + marker_width, center_y + marker_height * 0.5),
+    );
+    rect.has_finite_positive_area().then_some(rect)
+}
+
+fn target_marker_points(track: Rect, db: f32) -> Option<Arc<[Point]>> {
+    let rect = target_marker_rect(track, db)?;
+    let center_y = rect.center().y;
+    Some(Arc::from(vec![
+        Point::new(rect.min.x, center_y),
+        Point::new(rect.max.x, rect.min.y),
+        Point::new(rect.max.x, rect.max.y),
+    ]))
 }
 
 fn clamp_fraction(value: f32) -> f32 {
@@ -683,9 +697,9 @@ impl TargetStepDirection {
 
 fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bool) -> f32 {
     let step_db = if shift_held {
-        VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB
+        TARGET_FINE_KEYBOARD_STEP_DB
     } else {
-        VERTICAL_SLIDER_KEYBOARD_STEP_DB
+        TARGET_KEYBOARD_STEP_DB
     };
     (target_db + direction.sign() * step_db).clamp(TARGET_RANGE.min, TARGET_RANGE.max)
 }
@@ -1027,7 +1041,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let target_db = state.parameter_value(PARAM_TARGET_DB, TARGET_RANGE);
     state.sync_target_text(target_db);
     let target = custom_widget_mapped(
-        VerticalSlider::new(TARGET_RANGE.normalize(target_db))
+        TargetMeter::new(TARGET_RANGE.normalize(target_db))
             .with_shift_held(state.shift_held)
             .with_peak_levels(state.status.input_peak_db(), state.status.output_peak_db()),
         |message: SliderMessage| match message {
@@ -1039,7 +1053,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .primary()
     .key("target-peak")
     .width(TARGET_CONTROL_WIDTH)
-    .height(TARGET_SLIDER_HEIGHT);
+    .height(TARGET_METER_HEIGHT);
     // Keep the framework text input as the leaf so its native editing lifecycle
     // remains intact; the compact placeholder supplies the semantic name.
     let target_entry = text_input(state.target_text.clone())
@@ -1199,13 +1213,13 @@ mod tests {
     }
 
     #[test]
-    fn vertical_slider_maps_pointer_and_keyboard_input() {
-        let bounds = Rect::from_size(28.0, 140.0);
-        let mut slider = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
+    fn target_meter_maps_pointer_and_keyboard_input() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let mut slider = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
 
         let output = slider
             .handle_input(bounds, WidgetInput::primary_press(Point::new(14.0, 0.0)))
-            .expect("pressing the slider should emit a value");
+            .expect("pressing the meter rail should emit a value");
         assert_eq!(
             output.typed_copied::<SliderMessage>(),
             Some(SliderMessage::ValueChanged { value: 1.0 })
@@ -1215,10 +1229,10 @@ mod tests {
             .handle_input(
                 bounds,
                 WidgetInput::PointerMove {
-                    position: Point::new(14.0, 140.0),
+                    position: Point::new(TARGET_CONTROL_WIDTH * 0.5, TARGET_METER_HEIGHT),
                 },
             )
-            .expect("dragging the slider should emit a value");
+            .expect("dragging the meter rail should emit a value");
         assert_eq!(
             output.typed_copied::<SliderMessage>(),
             Some(SliderMessage::ValueChanged { value: 0.0 })
@@ -1227,7 +1241,7 @@ mod tests {
         slider.set_value(1.0);
         let output = slider
             .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowDown))
-            .expect("focused slider keyboard input should emit a value");
+            .expect("focused meter keyboard input should emit a value");
         assert_eq!(
             output.typed_copied::<SliderMessage>(),
             Some(SliderMessage::ValueChanged {
@@ -1237,9 +1251,9 @@ mod tests {
     }
 
     #[test]
-    fn vertical_slider_keyboard_steps_use_db_units_and_shift_fine_step() {
-        let bounds = Rect::from_size(28.0, 140.0);
-        let mut slider = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
+    fn target_meter_keyboard_steps_use_db_units_and_shift_fine_step() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let mut slider = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
         slider.common.state.focused = true;
 
         slider
@@ -1277,25 +1291,25 @@ mod tests {
     }
 
     #[test]
-    fn vertical_slider_keeps_projected_shift_modifier_when_rebuilt() {
-        let bounds = Rect::from_size(28.0, 140.0);
-        let previous = VerticalSlider::new(TARGET_RANGE.normalize(-12.0));
-        let mut current = VerticalSlider::new(previous.value).with_shift_held(true);
+    fn target_meter_keeps_projected_shift_modifier_when_rebuilt() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let previous = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
+        let mut current = TargetMeter::new(previous.value).with_shift_held(true);
 
         current.synchronize_from_previous(&previous);
         current.common.state.focused = true;
         current
             .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
-            .expect("rebuilt slider should accept keyboard input");
+            .expect("rebuilt meter should accept keyboard input");
 
         let target_db = TARGET_RANGE.denormalize(current.value);
         assert!((target_db - (-11.9)).abs() < 0.0001);
     }
 
     #[test]
-    fn peak_marker_mapping_uses_target_scale_bottom_up_and_clamps_silence() {
-        let bounds = Rect::from_size(28.0, 140.0);
-        let track = vertical_slider_track(bounds);
+    fn target_meter_mapping_uses_target_scale_and_clamps_endpoints() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let track = target_meter_track(bounds);
 
         assert_eq!(target_level_fraction(-120.0), 0.0);
         assert_eq!(target_level_fraction(TARGET_MIN_DB), 0.0);
@@ -1304,65 +1318,138 @@ mod tests {
         assert_eq!(target_level_fraction(24.0), 1.0);
         assert_eq!(target_level_fraction(f32::NAN), 0.0);
 
-        let bottom = marker_center_y(track, TARGET_MIN_DB);
-        let middle = marker_center_y(track, -18.0);
-        let top = marker_center_y(track, TARGET_MAX_DB);
-        assert!((bottom - (track.max.y - VERTICAL_SLIDER_THUMB_HEIGHT * 0.5)).abs() < f32::EPSILON);
-        assert!((middle - track.center().y).abs() < f32::EPSILON);
-        assert!((top - (track.min.y + VERTICAL_SLIDER_THUMB_HEIGHT * 0.5)).abs() < f32::EPSILON);
-        assert!(top < middle && middle < bottom);
+        assert_eq!(
+            target_value_for_position(bounds, Point::new(0.0, -10.0)),
+            1.0
+        );
+        assert_eq!(
+            target_value_for_position(bounds, Point::new(0.0, 200.0)),
+            0.0
+        );
+        assert!((target_value_for_position(bounds, track.center()) - 0.5).abs() < f32::EPSILON);
 
-        for db in [-120.0, TARGET_MIN_DB, TARGET_MAX_DB, 24.0] {
-            for side in [PeakMarkerSide::Left, PeakMarkerSide::Right] {
-                let marker = peak_marker_rect(bounds, track, db, side)
-                    .expect("a normal slider should have room for a marker");
-                assert!(marker.min.x >= bounds.min.x);
-                assert!(marker.max.x <= bounds.max.x);
-                assert!(marker.min.y >= bounds.min.y);
-                assert!(marker.max.y <= bounds.max.y);
-            }
-        }
+        let bottom = target_marker_rect(track, TARGET_MIN_DB)
+            .expect("the target marker should be visible at the minimum");
+        let middle = target_marker_rect(track, -18.0)
+            .expect("the target marker should be visible at the midpoint");
+        let top = target_marker_rect(track, TARGET_MAX_DB)
+            .expect("the target marker should be visible at the maximum");
+        assert!(top.center().y < middle.center().y && middle.center().y < bottom.center().y);
+        assert!((top.center().y - (track.min.y + TARGET_MARKER_HEIGHT * 0.5)).abs() < f32::EPSILON);
+        assert!(
+            (bottom.center().y - (track.max.y - TARGET_MARKER_HEIGHT * 0.5)).abs() < f32::EPSILON
+        );
     }
 
     #[test]
-    fn peak_markers_use_opposite_sides_and_distinct_colors_at_coincident_levels() {
-        let bounds = Rect::from_size(28.0, 140.0);
-        let track = vertical_slider_track(bounds);
-        let left = peak_marker_rect(bounds, track, -12.0, PeakMarkerSide::Left)
-            .expect("left marker should be visible");
-        let right = peak_marker_rect(bounds, track, -12.0, PeakMarkerSide::Right)
-            .expect("right marker should be visible");
-
-        assert!((left.min.y - right.min.y).abs() < f32::EPSILON);
-        assert!((left.max.y - right.max.y).abs() < f32::EPSILON);
-        assert!(left.max.x < track.min.x);
-        assert!(right.min.x > track.max.x);
-
-        let mut primitives = Vec::new();
-        let slider =
-            VerticalSlider::new(TARGET_RANGE.normalize(-12.0)).with_peak_levels(-12.0, -12.0);
+    fn target_meter_paints_distinct_realtime_levels_and_triangle_marker() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let track = target_meter_track(bounds);
+        let (input_track, output_track) = meter_columns(track);
+        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_peak_levels(-6.0, -24.0);
         let theme = ThemeTokens::default();
-        slider.append_paint(
-            &mut primitives,
-            bounds,
-            &radiant::layout::LayoutOutput::default(),
-            &theme,
-        );
-        let marker_colors = primitives
+        let primitives = meter.paint_primitives_with_defaults(bounds);
+
+        let input = meter_level_rect(input_track, -6.0).expect("input level should be visible");
+        let output = meter_level_rect(output_track, -24.0).expect("output level should be visible");
+        assert!(primitives.iter().any(|primitive| {
+            matches!(primitive, PaintPrimitive::FillRect(fill)
+                if fill.rect == input && fill.color == theme.highlight_orange)
+        }));
+        assert!(primitives.iter().any(|primitive| {
+            matches!(primitive, PaintPrimitive::FillRect(fill)
+                if fill.rect == output && fill.color == theme.highlight_cyan)
+        }));
+
+        let triangle = primitives
             .iter()
-            .filter_map(|primitive| match primitive {
-                PaintPrimitive::FillRect(fill)
-                    if (fill.rect.width() - VERTICAL_SLIDER_MARKER_WIDTH).abs() < f32::EPSILON
-                        && (fill.rect.height() - VERTICAL_SLIDER_MARKER_HEIGHT).abs()
-                            < f32::EPSILON =>
-                {
-                    Some(fill.color)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(marker_colors.contains(&theme.highlight_orange));
-        assert!(marker_colors.contains(&theme.highlight_cyan));
+            .find_map(PaintPrimitive::fill_polygon)
+            .expect("the target should be painted as a triangle");
+        assert_eq!(triangle.points.len(), 3);
+        assert_eq!(triangle.color, theme.text_primary);
+        assert!(!primitives.iter().any(|primitive| {
+            matches!(primitive, PaintPrimitive::FillRect(fill)
+                if fill.color == theme.text_primary)
+        }));
+    }
+
+    #[test]
+    fn target_meter_accepts_pointer_input_across_the_invisible_rail_and_captures_release() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let mut meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
+
+        let output = meter
+            .handle_input(bounds, WidgetInput::primary_press(Point::new(1.0, 88.0)))
+            .expect("the expanded rail should accept a press away from the visible meter");
+        let SliderMessage::ValueChanged { value } = output
+            .typed_copied::<SliderMessage>()
+            .expect("rail press should emit a slider value");
+        assert!((TARGET_RANGE.denormalize(value) - -18.0).abs() < 0.5);
+        assert!(meter.common.state.pressed);
+        assert!(meter.common.state.focused);
+
+        let output = meter
+            .handle_input(
+                bounds,
+                WidgetInput::PointerMove {
+                    position: Point::new(-20.0, bounds.min.y),
+                },
+            )
+            .expect("captured movement should continue to update the target outside bounds");
+        assert_eq!(
+            output.typed_copied::<SliderMessage>(),
+            Some(SliderMessage::ValueChanged { value: 1.0 })
+        );
+        meter.handle_input(
+            bounds,
+            WidgetInput::PointerRelease {
+                position: Point::new(-20.0, bounds.min.y),
+                button: PointerButton::Primary,
+                modifiers: PointerModifiers::default(),
+            },
+        );
+        assert!(!meter.common.state.pressed);
+        assert_eq!(
+            meter.pointer_capture_policy(),
+            PointerCapturePolicy::Exclusive
+        );
+    }
+
+    #[test]
+    fn target_meter_pointer_selection_updates_the_automated_target_parameter() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let sink = Arc::new(RecordingEditSink::default());
+        let edit_sink: Arc<dyn HostParamEditSink> = sink.clone();
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            Some(edit_sink),
+        );
+        let meter_rect = editor
+            .paint_plan()
+            .stroke_rects()
+            .find(|stroke| (stroke.rect.width() - TARGET_METER_TRACK_WIDTH).abs() < f32::EPSILON)
+            .expect("the target meter track should be painted")
+            .rect;
+
+        let press = Point::new(
+            meter_rect.min.x - TARGET_MARKER_GAP - 2.0,
+            meter_rect.center().y,
+        );
+        editor.dispatch_event(Event::primary_press(press));
+        editor.dispatch_event(Event::primary_release(press));
+
+        assert!((params.target_db() - (-18.0)).abs() < 0.5);
+        assert_eq!(
+            sink.events(),
+            vec![
+                EditEvent::Begin(PARAM_TARGET_DB),
+                EditEvent::Value(PARAM_TARGET_DB, params.target_db() as f64),
+                EditEvent::End(PARAM_TARGET_DB),
+            ]
+        );
     }
 
     #[test]
@@ -1585,7 +1672,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_target_edit_updates_the_slider_parameter_and_rejects_invalid_submit() {
+    fn typed_target_edit_updates_the_meter_parameter_and_rejects_invalid_submit() {
         let mut state = editor_state();
 
         reduce_message(
@@ -1789,18 +1876,21 @@ mod tests {
         let frame = plan
             .stroke_rects()
             .find(|stroke| {
-                (stroke.rect.width() - (TARGET_CONTROL_WIDTH - 1.0)).abs() < f32::EPSILON
-                    && (stroke.rect.height() - (TARGET_SLIDER_HEIGHT - 1.0)).abs() < f32::EPSILON
+                (stroke.rect.width() - TARGET_METER_TRACK_WIDTH).abs() < f32::EPSILON
+                    && (stroke.rect.height()
+                        - (TARGET_METER_HEIGHT - TARGET_METER_VERTICAL_INSET * 2.0))
+                        .abs()
+                        < f32::EPSILON
             })
-            .expect("the vertical meter should have a framed control bounds");
+            .expect("the vertical meter should have a framed track");
         let tick_count = plan
             .fill_rects_for_widget(frame.widget_id)
             .filter(|fill| {
-                fill.rect.height() == VERTICAL_SLIDER_TICK_HEIGHT
-                    && fill.rect.width() <= VERTICAL_SLIDER_TICK_WIDTH
+                fill.rect.height() == TARGET_METER_TICK_HEIGHT
+                    && fill.rect.width() <= TARGET_METER_TICK_WIDTH
             })
             .count();
-        assert_eq!(tick_count, VERTICAL_SLIDER_TICK_COUNT * 2);
+        assert_eq!(tick_count, TARGET_METER_TICK_COUNT);
 
         let entry = plan
             .first_text_input()
@@ -1926,7 +2016,7 @@ mod tests {
             (TARGET_CONTROL_WIDTH, ACTION_CONTROL_HEIGHT),
             (ACTION_CONTROL_WIDTH, ACTION_CONTROL_HEIGHT),
             (ACTION_CONTROL_WIDTH, MATCHING_CONTROL_HEIGHT),
-            (TARGET_CONTROL_WIDTH, TARGET_SLIDER_HEIGHT),
+            (TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT),
             (TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT),
             (MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT),
             (NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT),
@@ -2010,26 +2100,24 @@ mod tests {
         assert!(!editor.needs_realtime_redraw());
     }
 
-    fn marker_rect_for_color(plan: &SurfacePaintPlan, color: Rgba8) -> Rect {
+    fn meter_level_rect_for_color(plan: &SurfacePaintPlan, color: Rgba8) -> Rect {
         plan.primitives
             .iter()
             .find_map(|primitive| match primitive {
                 PaintPrimitive::FillRect(fill)
                     if fill.color == color
-                        && (fill.rect.width() - VERTICAL_SLIDER_MARKER_WIDTH).abs()
-                            < f32::EPSILON
-                        && (fill.rect.height() - VERTICAL_SLIDER_MARKER_HEIGHT).abs()
-                            < f32::EPSILON =>
+                        && (fill.rect.width() - TARGET_METER_COLUMN_WIDTH).abs() < f32::EPSILON
+                        && fill.rect.height() > 0.0 =>
                 {
                     Some(fill.rect)
                 }
                 _ => None,
             })
-            .expect("the requested peak marker should be painted")
+            .expect("the requested meter level should be painted")
     }
 
     #[test]
-    fn editor_repaints_when_realtime_peak_markers_move() {
+    fn editor_repaints_when_realtime_meter_levels_move() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         let mut editor = GainSnapEditor::new(
@@ -2041,25 +2129,64 @@ mod tests {
         );
         let theme = ThemeTokens::default();
 
+        status.update(-24.0, -24.0, 0.0, 0.5, MatchState::Measuring);
         let (initial_input, initial_output) = {
             let plan = editor.paint_plan();
             (
-                marker_rect_for_color(plan, theme.highlight_orange),
-                marker_rect_for_color(plan, theme.highlight_cyan),
+                meter_level_rect_for_color(plan, theme.highlight_orange),
+                meter_level_rect_for_color(plan, theme.highlight_cyan),
             )
         };
 
-        status.update(-6.0, -18.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-6.0, -12.0, 0.0, 0.5, MatchState::Measuring);
         assert!(editor.needs_realtime_redraw());
         let plan = editor.paint_plan();
-        let updated_input = marker_rect_for_color(plan, theme.highlight_orange);
-        let updated_output = marker_rect_for_color(plan, theme.highlight_cyan);
+        let updated_input = meter_level_rect_for_color(plan, theme.highlight_orange);
+        let updated_output = meter_level_rect_for_color(plan, theme.highlight_cyan);
 
         assert!(updated_input.min.y < initial_input.min.y);
         assert!(updated_output.min.y < initial_output.min.y);
         assert!(!plan.contains_text("IN  -6.0 dBFS"));
         assert!(!plan.contains_text("OUT -18.0 dBFS"));
         assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn editor_retains_target_meter_focus_during_realtime_refresh() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let status = Arc::new(GuiStatus::default());
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::clone(&status),
+            None,
+            None,
+        );
+        let meter_rect = {
+            let plan = editor.paint_plan();
+            plan.stroke_rects()
+                .find(|stroke| {
+                    (stroke.rect.width() - TARGET_METER_TRACK_WIDTH).abs() < f32::EPSILON
+                })
+                .expect("the target meter track should be painted")
+                .rect
+        };
+        let meter_id = editor
+            .paint_plan()
+            .stroke_rects()
+            .find(|stroke| stroke.rect == meter_rect)
+            .expect("the target meter should retain a stable widget id")
+            .widget_id;
+
+        editor.dispatch_event(Event::primary_press(meter_rect.center()));
+        assert_eq!(editor.runtime.focused_widget(), Some(meter_id));
+
+        status.update(-6.0, -12.0, 0.0, 0.5, MatchState::Measuring);
+        assert!(editor.needs_realtime_redraw());
+        editor.paint_plan();
+        assert_eq!(editor.runtime.focused_widget(), Some(meter_id));
+
+        editor.dispatch_event(Event::primary_release(meter_rect.center()));
     }
 
     #[test]

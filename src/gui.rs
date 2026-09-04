@@ -1468,6 +1468,8 @@ mod tests {
 
     #[test]
     fn focused_target_entry_keeps_formatted_values_and_caret_room() {
+        const MIN_FOCUSED_TARGET_ENTRY_WIDTH: f32 = 68.0;
+
         for target_db in [
             TARGET_MIN_DB,
             crate::params::DEFAULT_TARGET_DB,
@@ -1498,8 +1500,12 @@ mod tests {
             assert!(focused.focused);
             assert_eq!(focused.state.value, format_target_text(target_db));
             assert!(
-                focused.rect.width() >= 52.0,
-                "focused target entry needs enough content width for its caret: {:?}",
+                TARGET_CONTROL_WIDTH >= MIN_FOCUSED_TARGET_ENTRY_WIDTH,
+                "target entry outer width must leave room for focused caret rendering: {TARGET_CONTROL_WIDTH}px"
+            );
+            assert!(
+                focused.rect.width() >= MIN_FOCUSED_TARGET_ENTRY_WIDTH - 16.0,
+                "focused target entry content width is too narrow for its caret: {:?}",
                 focused.rect
             );
         }

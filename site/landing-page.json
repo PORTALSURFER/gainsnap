@@ -4,8 +4,8 @@
 "name": "GainSnap",
 "category": "Utility",
 "summary": "Toggle peak matching for Ableton tracks",
-"description": "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical bar shows realtime incoming (IN) and adjusted (OUT) peak markers.",
-"features": ["Native macOS audio processing", "One-click 0 dBFS normalization", "Realtime IN and OUT peak markers", "Toybox-based host and GUI integration", "Reproducible CLAP and VST3 release automation"],
+"description": "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows the latest block peaks in realtime: the orange column is the incoming (IN) level, and the cyan column is the adjusted (OUT) level. A small triangle beside the meter marks the target and acts as the target control.",
+"features": ["Native macOS audio processing", "One-click 0 dBFS normalization", "Realtime IN and OUT peak levels with target marker", "Toybox-based host and GUI integration", "Reproducible CLAP and VST3 release automation"],
 "formats": ["CLAP", "VST3"],
 "hero": null,
 "donation": {

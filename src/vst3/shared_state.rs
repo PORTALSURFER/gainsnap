@@ -186,6 +186,7 @@ impl ComponentHandlerOwner {
     }
 
     /// Clone one handler reference without holding the mutex during host code.
+    #[cfg(target_os = "macos")]
     pub(super) fn clone_handler(&self) -> Option<ComPtr<IComponentHandler>> {
         let guard = self.handler.lock().ok()?;
         let handler = guard.as_ref()?;

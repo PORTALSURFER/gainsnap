@@ -234,10 +234,9 @@ impl GainSnapEngine {
         }
         let safe_gain = OUTPUT_PEAK_CEILING_LINEAR / input_peak;
         if safe_gain.is_finite() && safe_gain < self.current_gain {
+            // Keep this intervention transient: the requested target remains
+            // intact so the normal upward slew can recover on quieter samples.
             self.current_gain = safe_gain.max(0.0);
-            // Keep a temporary safety reduction from being immediately
-            // replaced by a stale upward target on the next quiet sample.
-            self.target_gain = self.target_gain.min(self.current_gain);
         }
     }
 }
@@ -283,7 +282,7 @@ fn sanitize_gain_db(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{PARAM_MATCH, PARAM_TARGET_DB};
+    use crate::params::{PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_TARGET_DB};
 
     fn run_frames(engine: &mut GainSnapEngine, params: &GainSnapParams, left: f32, frames: usize) {
         for _ in 0..frames {
@@ -453,6 +452,7 @@ mod tests {
     #[test]
     fn output_guard_caps_stored_boost_without_nan_or_clipping() {
         let params = GainSnapParams::new();
+        params.set_param(PARAM_LOCKED_GAIN_DB, GAIN_MAX_DB);
         let mut engine = GainSnapEngine::new(48_000.0, GAIN_MAX_DB);
         engine.begin_block(&params);
 
@@ -460,5 +460,14 @@ mod tests {
         assert!(output.0.is_finite() && output.1.is_finite());
         assert!(output.0.abs() <= OUTPUT_PEAK_CEILING_LINEAR);
         assert!(output.1.abs() <= OUTPUT_PEAK_CEILING_LINEAR);
+
+        // The full-scale sample is capped without rewriting the requested
+        // stored boost; a quieter run can recover toward that target through
+        // the bounded upward slew.
+        assert!((engine.target_gain - db_to_linear(GAIN_MAX_DB)).abs() < f32::EPSILON);
+        let capped_gain = engine.current_gain;
+        run_frames(&mut engine, &params, 0.1, 256);
+        assert!(engine.current_gain > capped_gain);
+        assert!(engine.current_gain < db_to_linear(GAIN_MAX_DB));
     }
 }

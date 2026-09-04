@@ -574,10 +574,13 @@ fn target_level_fraction(db: f32) -> f32 {
 
 fn target_value_for_position(bounds: Rect, position: Point) -> f32 {
     let track = target_meter_track(bounds);
-    if !track.has_finite_positive_area() {
+    let Some(geometry) = target_marker_geometry(track) else {
+        return 0.0;
+    };
+    if geometry.travel <= 0.0 {
         return 0.0;
     }
-    clamp_fraction(1.0 - (position.y - track.min.y) / track.height())
+    clamp_fraction((geometry.bottom_center_y - position.y) / geometry.travel)
 }
 
 fn meter_columns(track: Rect) -> (Rect, Rect) {
@@ -619,22 +622,51 @@ fn push_meter_level(
     }
 }
 
-fn target_marker_rect(track: Rect, db: f32) -> Option<Rect> {
+#[derive(Clone, Copy, Debug)]
+struct TargetMarkerGeometry {
+    height: f32,
+    top_center_y: f32,
+    bottom_center_y: f32,
+    travel: f32,
+}
+
+fn target_marker_geometry(track: Rect) -> Option<TargetMarkerGeometry> {
     if !track.has_finite_positive_area() {
         return None;
     }
-    let marker_width = TARGET_MARKER_WIDTH;
-    let marker_height = TARGET_MARKER_HEIGHT.min(track.height());
-    if marker_height <= 0.0 {
+    let height = TARGET_MARKER_HEIGHT.min(track.height());
+    if !height.is_finite() || height <= 0.0 {
         return None;
     }
-    let center_y = track.max.y
-        - marker_height * 0.5
-        - target_level_fraction(db) * (track.height() - marker_height);
+    let half_height = height * 0.5;
+    let top_center_y = track.min.y + half_height;
+    let bottom_center_y = track.max.y - half_height;
+    let travel = (bottom_center_y - top_center_y).max(0.0);
+    (top_center_y.is_finite() && bottom_center_y.is_finite() && travel.is_finite()).then_some(
+        TargetMarkerGeometry {
+            height,
+            top_center_y,
+            bottom_center_y,
+            travel,
+        },
+    )
+}
+
+fn target_marker_rect(track: Rect, db: f32) -> Option<Rect> {
+    let geometry = target_marker_geometry(track)?;
+    let marker_width = TARGET_MARKER_WIDTH;
+    let fraction = target_level_fraction(db);
+    let center_y = if fraction >= 1.0 {
+        geometry.top_center_y
+    } else if fraction <= 0.0 {
+        geometry.bottom_center_y
+    } else {
+        geometry.bottom_center_y - fraction * geometry.travel
+    };
     let marker_x = track.max.x + TARGET_MARKER_GAP;
     let rect = Rect::from_min_max(
-        Point::new(marker_x, center_y - marker_height * 0.5),
-        Point::new(marker_x + marker_width, center_y + marker_height * 0.5),
+        Point::new(marker_x, center_y - geometry.height * 0.5),
+        Point::new(marker_x + marker_width, center_y + geometry.height * 0.5),
     );
     rect.has_finite_positive_area().then_some(rect)
 }
@@ -1339,6 +1371,49 @@ mod tests {
         assert!(
             (bottom.center().y - (track.max.y - TARGET_MARKER_HEIGHT * 0.5)).abs() < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn target_meter_round_trips_marker_centers_to_normalized_values() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let track = target_meter_track(bounds);
+
+        for (db, expected) in [(TARGET_MIN_DB, 0.0), (-18.0, 0.5), (TARGET_MAX_DB, 1.0)] {
+            let center = target_marker_rect(track, db)
+                .expect("the target marker should be visible")
+                .center();
+            assert_eq!(target_value_for_position(bounds, center), expected);
+        }
+    }
+
+    #[test]
+    fn target_meter_endpoint_triangle_clicks_are_noops_and_release_clears_pressed_state() {
+        let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
+        let track = target_meter_track(bounds);
+
+        for (db, value) in [(TARGET_MIN_DB, 0.0), (TARGET_MAX_DB, 1.0)] {
+            let center = target_marker_rect(track, db)
+                .expect("the target marker should be visible")
+                .center();
+            let mut meter = TargetMeter::new(value);
+
+            assert!(meter
+                .handle_input(bounds, WidgetInput::primary_press(center))
+                .is_none());
+            assert!(meter.common.state.pressed);
+
+            assert!(meter
+                .handle_input(
+                    bounds,
+                    WidgetInput::PointerRelease {
+                        position: center,
+                        button: PointerButton::Primary,
+                        modifiers: PointerModifiers::default(),
+                    },
+                )
+                .is_none());
+            assert!(!meter.common.state.pressed);
+        }
     }
 
     #[test]

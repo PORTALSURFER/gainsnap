@@ -80,6 +80,7 @@ impl GuiStatus {
 
     /// Read the most recent input peak in decibels.
     #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+    #[allow(dead_code)]
     pub fn input_peak_db(&self) -> f32 {
         read_f32(&self.input_peak_db)
     }

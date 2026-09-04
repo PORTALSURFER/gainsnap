@@ -11,7 +11,7 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView, Widget,
+    column, custom_widget, custom_widget_mapped, row, text, text_input, IntoView, Widget,
     WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
@@ -22,8 +22,8 @@ use radiant::runtime::{
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, PointerCapturePolicy,
-    SliderMessage, TextInputMessage, TextWrap, WidgetCapabilities, WidgetId, WidgetSemantics,
-    WidgetStyle, WidgetTone,
+    SliderMessage, TextInputMessage, TextWrap, ToggleMessage, ToggleWidget, WidgetCapabilities,
+    WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -82,6 +82,9 @@ const TARGET_METER_LABEL_ALPHA: u8 = 148;
 const TARGET_MARKER_GAP: f32 = 5.0;
 const TARGET_MARKER_WIDTH: f32 = 8.0;
 const TARGET_MARKER_HEIGHT: f32 = 8.0;
+const MATCH_PULSE_PERIOD_SECONDS: f32 = 1.8;
+const MATCH_PULSE_MIN_ALPHA: u8 = 24;
+const MATCH_PULSE_MAX_ALPHA: u8 = 72;
 const METER_ATTACK_SECONDS: f32 = 0.010;
 const METER_RELEASE_SECONDS: f32 = 0.300;
 const METER_MAX_ELAPSED_SECONDS: f32 = 0.100;
@@ -301,7 +304,100 @@ impl Widget for NormalizeButtonWidget {
     }
 }
 
-/// Compact target control that combines a realtime input meter with a draggable
+/// Match toggle with a restrained active-only pulse around its existing
+/// control chrome. The pulse is supplied by the editor's UI-thread clock;
+/// input routing, focus, and automation remain owned by the shared toggle.
+#[derive(Clone, Debug, PartialEq)]
+struct PulseToggleWidget {
+    toggle: ToggleWidget,
+    pulse: f32,
+}
+
+impl PulseToggleWidget {
+    fn new(checked: bool, pulse: f32) -> Self {
+        let mut toggle = ToggleWidget::new(
+            0,
+            "MATCH",
+            WidgetSizing::fixed(Vector2::new(MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT)),
+        )
+        .with_checked(checked);
+        toggle.common.style = WidgetStyle::normal(WidgetTone::Accent);
+        Self {
+            toggle,
+            pulse: sanitize_pulse(pulse),
+        }
+    }
+}
+
+impl WidgetSemantics for PulseToggleWidget {
+    fn automation_role(&self) -> AutomationRole {
+        self.toggle.automation_role()
+    }
+
+    fn automation_label(&self) -> Option<String> {
+        self.toggle.automation_label()
+    }
+
+    fn automation_description(&self) -> Option<String> {
+        Some(String::from("Toggle realtime peak matching"))
+    }
+
+    fn automation_checked(&self) -> Option<bool> {
+        self.toggle.automation_checked()
+    }
+}
+
+impl Widget for PulseToggleWidget {
+    fn common(&self) -> &WidgetCommon {
+        self.toggle.common()
+    }
+
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        self.toggle.common_mut()
+    }
+
+    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
+        self.toggle
+            .handle_input(bounds, input)
+            .map(WidgetOutput::typed)
+    }
+
+    fn accepts_pointer_move(&self) -> bool {
+        self.toggle.accepts_pointer_move()
+    }
+
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        WidgetCapabilities::new().semantics(self)
+    }
+
+    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
+        let Some(previous) = previous.as_any().downcast_ref::<Self>() else {
+            return;
+        };
+        self.toggle.synchronize_from_previous(&previous.toggle);
+    }
+
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        self.toggle.append_paint(primitives, bounds, layout, theme);
+        if self.toggle.state.checked {
+            let alpha = pulse_alpha(self.pulse);
+            primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
+                widget_id: self.toggle.common.id,
+                rect: bounds,
+                color: theme.accent_mint.with_alpha(alpha),
+                width: 1.0,
+            }));
+        }
+    }
+}
+
+/// Compact target control that combines a realtime output meter with a draggable
 /// target marker. The full widget bounds are an intentionally wider invisible
 /// rail, so the small marker remains easy to grab without changing the visual
 /// proportions of the editor.
@@ -310,7 +406,7 @@ struct TargetMeter {
     common: WidgetCommon,
     value: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
 }
 
 impl TargetMeter {
@@ -327,7 +423,7 @@ impl TargetMeter {
             common,
             value: clamp_fraction(value),
             shift_held: false,
-            input_peak_db: -120.0,
+            output_peak_db: -120.0,
         }
     }
 
@@ -336,8 +432,8 @@ impl TargetMeter {
         self
     }
 
-    fn with_input_peak_db(mut self, input_peak_db: f32) -> Self {
-        self.input_peak_db = input_peak_db;
+    fn with_output_peak_db(mut self, output_peak_db: f32) -> Self {
+        self.output_peak_db = output_peak_db;
         self
     }
 
@@ -539,7 +635,7 @@ impl Widget for TargetMeter {
             primitives,
             self.common.id,
             track,
-            self.input_peak_db,
+            self.output_peak_db,
             theme.highlight_orange,
         );
         primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
@@ -736,6 +832,28 @@ fn sanitize_meter_level_db(value: f32) -> f32 {
     }
 }
 
+fn sanitize_pulse(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn pulse_alpha(pulse: f32) -> u8 {
+    let pulse = sanitize_pulse(pulse);
+    (f32::from(MATCH_PULSE_MIN_ALPHA)
+        + (f32::from(MATCH_PULSE_MAX_ALPHA - MATCH_PULSE_MIN_ALPHA) * pulse))
+        .round() as u8
+}
+
+fn match_pulse_strength(phase: f32, active: bool) -> f32 {
+    if !active || !phase.is_finite() {
+        return 0.0;
+    }
+    (0.5 - 0.5 * (std::f32::consts::TAU * phase.rem_euclid(1.0)).cos()).clamp(0.0, 1.0)
+}
+
 fn smooth_meter_level_db(current_db: f32, target_db: f32, elapsed: Duration) -> f32 {
     let current_db = sanitize_meter_level_db(current_db);
     let target_db = sanitize_meter_level_db(target_db);
@@ -807,7 +925,7 @@ fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bo
 struct DisplaySnapshot {
     target_db: u32,
     match_requested: bool,
-    input_peak_db: u32,
+    output_peak_db: u32,
     locked_gain_db: u32,
     progress: u32,
     state: MatchState,
@@ -822,7 +940,7 @@ impl DisplaySnapshot {
                 .clamp(TARGET_RANGE.min, TARGET_RANGE.max)
                 .to_bits(),
             match_requested: params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
-            input_peak_db: sanitize_meter_level_db(status.input_peak_db()).to_bits(),
+            output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
             locked_gain_db: status.locked_gain_db().to_bits(),
             progress: status.progress().to_bits(),
             state: status.state(),
@@ -867,8 +985,11 @@ struct EditorState {
     target_text: String,
     target_text_param: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
     meter_last_update: Instant,
+    match_pulse_phase: f32,
+    match_pulse_last_update: Instant,
+    match_pulse_active: bool,
 }
 
 impl EditorState {
@@ -883,7 +1004,8 @@ impl EditorState {
             .get_param(PARAM_TARGET_DB)
             .unwrap_or(TARGET_RANGE.default)
             .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
-        let input_peak_db = sanitize_meter_level_db(status.input_peak_db());
+        let output_peak_db = sanitize_meter_level_db(status.output_peak_db());
+        let now = Instant::now();
         Self {
             params,
             automation_queue,
@@ -894,24 +1016,59 @@ impl EditorState {
             target_text: format_target_text(target_db),
             target_text_param: target_db,
             shift_held: false,
-            input_peak_db,
-            meter_last_update: Instant::now(),
+            output_peak_db,
+            meter_last_update: now,
+            match_pulse_phase: 0.0,
+            match_pulse_last_update: now,
+            match_pulse_active: false,
         }
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
         let elapsed = now.saturating_duration_since(self.meter_last_update);
         self.meter_last_update = now;
-        let next_db = smooth_meter_level_db(self.input_peak_db, target_db, elapsed);
-        let changed = (next_db - self.input_peak_db).abs() > f32::EPSILON;
-        self.input_peak_db = next_db;
+        let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
+        let changed = (next_db - self.output_peak_db).abs() > f32::EPSILON;
+        self.output_peak_db = next_db;
         changed
     }
 
     fn meter_needs_realtime_redraw(&self) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
-        (self.input_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
+        (self.output_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
+    }
+
+    fn advance_match_pulse_at(&mut self, now: Instant) -> bool {
+        let active = self.params.match_requested();
+        let elapsed = now
+            .saturating_duration_since(self.match_pulse_last_update)
+            .as_secs_f32()
+            .min(METER_MAX_ELAPSED_SECONDS);
+        self.match_pulse_last_update = now;
+
+        if !active {
+            let changed = self.match_pulse_active || self.match_pulse_phase != 0.0;
+            self.match_pulse_active = false;
+            self.match_pulse_phase = 0.0;
+            return changed;
+        }
+
+        if !self.match_pulse_active {
+            self.match_pulse_active = true;
+            self.match_pulse_phase = 0.0;
+            return true;
+        }
+        if elapsed <= 0.0 {
+            return false;
+        }
+        let previous = self.match_pulse_phase;
+        self.match_pulse_phase = (previous + elapsed / MATCH_PULSE_PERIOD_SECONDS).rem_euclid(1.0);
+        (self.match_pulse_phase - previous).abs() > f32::EPSILON
+    }
+
+    fn match_pulse_strength(&self) -> f32 {
+        match_pulse_strength(self.match_pulse_phase, self.match_pulse_active)
     }
 
     fn parameter_value(&self, id: ClapId, range: ParamRange) -> f32 {
@@ -1060,12 +1217,15 @@ impl GainSnapEditor {
 
     fn paint_plan(&mut self) -> &SurfacePaintPlan {
         let display_snapshot = self.display_snapshot();
-        let meter_changed = self
-            .runtime
-            .bridge_mut()
-            .state_mut()
-            .advance_meter_at(Instant::now());
-        if display_snapshot != self.last_display_snapshot || meter_changed {
+        let now = Instant::now();
+        let (meter_changed, pulse_changed) = {
+            let state = self.runtime.bridge_mut().state_mut();
+            (
+                state.advance_meter_at(now),
+                state.advance_match_pulse_at(now),
+            )
+        };
+        if display_snapshot != self.last_display_snapshot || meter_changed || pulse_changed {
             self.last_display_snapshot = display_snapshot;
             self.runtime.refresh();
         }
@@ -1083,6 +1243,8 @@ impl GainSnapEditor {
     fn needs_realtime_redraw(&self) -> bool {
         self.display_snapshot() != self.last_display_snapshot
             || self.runtime.bridge().state().meter_needs_realtime_redraw()
+            || self.runtime.bridge().state().params.match_requested()
+            || self.runtime.bridge().state().match_pulse_active
     }
 
     fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
@@ -1166,7 +1328,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let target = custom_widget_mapped(
         TargetMeter::new(TARGET_RANGE.normalize(target_db))
             .with_shift_held(state.shift_held)
-            .with_input_peak_db(state.input_peak_db),
+            .with_output_peak_db(state.output_peak_db),
         |message: SliderMessage| match message {
             SliderMessage::ValueChanged { value } => {
                 EditorMessage::TargetChanged(TARGET_RANGE.denormalize(value))
@@ -1187,15 +1349,18 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .width(TARGET_CONTROL_WIDTH)
         .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
-        toggle(
-            "MATCH",
-            state.params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
+        custom_widget_mapped(
+            PulseToggleWidget::new(
+                state.params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
+                state.match_pulse_strength(),
+            ),
+            |message: ToggleMessage| match message {
+                ToggleMessage::ValueChanged { checked } => EditorMessage::Toggle {
+                    id: PARAM_MATCH,
+                    checked,
+                },
+            },
         )
-        .style(WidgetStyle::normal(WidgetTone::Accent))
-        .message(|checked| EditorMessage::Toggle {
-            id: PARAM_MATCH,
-            checked,
-        })
         .key("match-now")
         .width(MATCH_BUTTON_WIDTH)
         .height(MATCH_BUTTON_HEIGHT),
@@ -1511,7 +1676,7 @@ mod tests {
     fn target_meter_paints_single_full_width_orange_level_and_scale_labels() {
         let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
         let track = target_meter_track(bounds);
-        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_input_peak_db(-6.0);
+        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_output_peak_db(-6.0);
         let theme = ThemeTokens::default();
         let primitives = meter.paint_primitives_with_defaults(bounds);
 
@@ -1991,6 +2156,84 @@ mod tests {
     }
 
     #[test]
+    fn match_toggle_pulse_is_soft_active_only_and_ui_thread_driven() {
+        assert_eq!(match_pulse_strength(0.25, false), 0.0);
+        assert_eq!(pulse_alpha(0.0), MATCH_PULSE_MIN_ALPHA);
+        assert_eq!(pulse_alpha(1.0), MATCH_PULSE_MAX_ALPHA);
+        assert!(match_pulse_strength(0.5, true) > match_pulse_strength(0.25, true));
+        assert!(match_pulse_strength(0.5, true) > match_pulse_strength(0.0, true));
+
+        let mut state = editor_state();
+        let initial = state.match_pulse_last_update;
+        assert!(!state.advance_match_pulse_at(initial + Duration::from_millis(10)));
+        assert!(!state.match_pulse_active);
+
+        state.params.set_param(PARAM_MATCH, 1.0);
+        assert!(state.advance_match_pulse_at(initial + Duration::from_millis(20)));
+        assert!(state.match_pulse_active);
+        assert_eq!(state.match_pulse_phase, 0.0);
+
+        let mut peak = initial + Duration::from_millis(20);
+        for _ in 0..9 {
+            peak += Duration::from_millis(100);
+            assert!(state.advance_match_pulse_at(peak));
+        }
+        assert!(state.match_pulse_strength() > 0.99);
+
+        state.params.set_param(PARAM_MATCH, 0.0);
+        assert!(state.advance_match_pulse_at(peak + Duration::from_millis(10)));
+        assert!(!state.match_pulse_active);
+        assert_eq!(state.match_pulse_strength(), 0.0);
+    }
+
+    #[test]
+    fn active_match_paints_a_pulsing_outline_without_changing_toggle_semantics() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut state = EditorState::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let now = state.match_pulse_last_update;
+        state.advance_match_pulse_at(now + Duration::from_millis(1));
+        let theme = ThemeTokens::default();
+
+        let plan = project_surface(&mut state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &theme,
+            )
+            .paint_plan;
+        let match_id = plan
+            .first_text_run("MATCH")
+            .expect("match label should be painted")
+            .widget_id;
+        let minimum_pulse = plan
+            .stroke_rects()
+            .find(|stroke| {
+                stroke.widget_id == match_id
+                    && stroke.color == theme.accent_mint.with_alpha(MATCH_PULSE_MIN_ALPHA)
+            })
+            .expect("active match should paint a subtle pulse outline");
+        assert_eq!(minimum_pulse.width, 1.0);
+
+        state.match_pulse_phase = 0.5;
+        let plan = project_surface(&mut state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &theme,
+            )
+            .paint_plan;
+        assert!(plan.stroke_rects().any(|stroke| {
+            stroke.widget_id == match_id
+                && stroke.color == theme.accent_mint.with_alpha(MATCH_PULSE_MAX_ALPHA)
+        }));
+    }
+
+    #[test]
     fn compact_surface_keeps_action_buttons_at_requested_size() {
         let mut state = editor_state();
         let plan = project_surface(&mut state)
@@ -2276,7 +2519,7 @@ mod tests {
             .fill_polygons()
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Measuring… toggle off to lock"));
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -12.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -12.0;
         assert!(!editor.needs_realtime_redraw());
 
         status.update(-6.0, -3.0, 3.0, 1.0, MatchState::Locked);
@@ -2287,7 +2530,7 @@ mod tests {
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Locked +3.00 dB"));
         assert!(editor.needs_realtime_redraw());
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -6.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -3.0;
         assert!(!editor.needs_realtime_redraw());
     }
 
@@ -2309,7 +2552,7 @@ mod tests {
     fn editor_repaints_when_realtime_meter_level_moves() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
-        status.update(-24.0, -24.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-6.0, -24.0, 0.0, 0.5, MatchState::Measuring);
         let mut editor = GainSnapEditor::new(
             Arc::clone(&params),
             Arc::new(AutomationQueue::default()),
@@ -2319,17 +2562,18 @@ mod tests {
         );
         let theme = ThemeTokens::default();
 
-        let initial_input = meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
+        let initial_output =
+            meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
 
-        status.update(-6.0, -12.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-30.0, -12.0, 0.0, 0.5, MatchState::Measuring);
         editor.runtime.bridge_mut().state_mut().meter_last_update =
             Instant::now() - Duration::from_millis(5);
         assert!(editor.needs_realtime_redraw());
         let plan = editor.paint_plan();
-        let updated_input = meter_level_rect_for_color(plan, theme.highlight_orange);
+        let updated_output = meter_level_rect_for_color(plan, theme.highlight_orange);
 
-        assert!(updated_input.min.y < initial_input.min.y);
-        assert_eq!(updated_input.width(), TARGET_METER_TRACK_WIDTH);
+        assert!(updated_output.min.y < initial_output.min.y);
+        assert_eq!(updated_output.width(), TARGET_METER_TRACK_WIDTH);
         assert!(!plan.primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
                 if fill.color == theme.highlight_cyan)
@@ -2337,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_ignores_output_only_telemetry_for_meter_repaint() {
+    fn editor_ignores_input_only_telemetry_for_meter_repaint() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         status.update(-12.0, -24.0, 0.0, 0.5, MatchState::Measuring);
@@ -2351,7 +2595,7 @@ mod tests {
         editor.paint_plan();
         assert!(!editor.needs_realtime_redraw());
 
-        status.update(-12.0, -3.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-3.0, -24.0, 0.0, 0.5, MatchState::Measuring);
         assert!(!editor.needs_realtime_redraw());
     }
 
@@ -2393,14 +2637,14 @@ mod tests {
             None,
             None,
         );
-        state.input_peak_db = -6.0;
+        state.output_peak_db = -6.0;
         let mut now = state.meter_last_update;
         for _ in 0..100 {
             now += Duration::from_millis(100);
             state.advance_meter_at(now);
         }
         assert!(!state.meter_needs_realtime_redraw());
-        assert_eq!(state.input_peak_db, -30.0);
+        assert_eq!(state.output_peak_db, -30.0);
     }
 
     #[test]
@@ -2493,7 +2737,9 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         assert!(editor.needs_realtime_redraw());
         assert_eq!(match_fill_color(editor.paint_plan()), theme.accent_mint);
-        assert!(!editor.needs_realtime_redraw());
+        // Active matching keeps the UI repainting so the soft pulse can
+        // advance even when the audio telemetry is unchanged.
+        assert!(editor.needs_realtime_redraw());
 
         params.set_param(PARAM_MATCH, 0.0);
         assert!(editor.needs_realtime_redraw());

@@ -4,4 +4,4 @@
 
 - Initial plugin scaffold.
 - Added a compact Normalize action that sets the target to 0 dBFS and starts Match.
-- Added a smoothed realtime orange input meter with a dB scale and target marker.
+- Added live bounded peak correction while Match is active, with a smoothed realtime orange post-gain output meter, dB scale, and target marker.

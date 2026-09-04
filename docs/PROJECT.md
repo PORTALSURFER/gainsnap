@@ -2,13 +2,13 @@
 
 ## Summary
 
-GainSnap measures an incoming track peak while Match is enabled, applies the
-gain needed to reach a chosen target when Match is disabled, and holds that
-gain until the next measurement. Normalize sets the target to 0 dBFS and
-starts Match in one click. The vertical meter shows a smoothed incoming peak
-in realtime as one thick orange column, with a small dB scale at its left edge.
-A small triangle beside the meter marks the target and acts as the target
-control.
+GainSnap tracks an incoming running peak while Match is enabled and applies
+bounded gain correction toward a chosen target in realtime. When Match is
+disabled, the final running-peak correction is locked until the next
+measurement. Normalize sets the target to 0 dBFS and starts Match in one click.
+The vertical meter shows a smoothed post-gain output peak in realtime as one
+thick orange column, with a small dB scale at its left edge. A small triangle
+beside the meter marks the target and acts as the target control.
 
 ## Constraints
 

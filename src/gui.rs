@@ -41,7 +41,10 @@ pub const MAX_WINDOW_WIDTH: u32 = 480;
 pub const MAX_WINDOW_HEIGHT: u32 = 520;
 
 const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
-const TARGET_CONTROL_WIDTH: f32 = 56.0;
+// Compact text inputs reserve horizontal insets for their chrome and focused
+// caret. Keep enough room for the longest formatted target (for example,
+// `-12.0`) to remain visible while it is being edited.
+const TARGET_CONTROL_WIDTH: f32 = 68.0;
 const TARGET_SLIDER_HEIGHT: f32 = 176.0;
 const TARGET_ENTRY_HEIGHT: f32 = 28.0;
 const TARGET_CONTROL_SPACING: f32 = 8.0;
@@ -1461,6 +1464,45 @@ mod tests {
             .expect("the target entry should remain visible below the meter");
         assert!(entry.rect.min.y >= frame.rect.max.y);
         assert!(entry.rect.width() <= TARGET_CONTROL_WIDTH);
+    }
+
+    #[test]
+    fn focused_target_entry_keeps_formatted_values_and_caret_room() {
+        for target_db in [
+            TARGET_MIN_DB,
+            crate::params::DEFAULT_TARGET_DB,
+            TARGET_MAX_DB,
+        ] {
+            let params = Arc::new(crate::params::GainSnapParams::new());
+            params.set_param(PARAM_TARGET_DB, target_db);
+            let mut editor = GainSnapEditor::new(
+                params,
+                Arc::new(AutomationQueue::default()),
+                Arc::new(GuiStatus::default()),
+                None,
+                None,
+            );
+
+            let unfocused = editor.paint_plan().clone();
+            let target_entry = unfocused
+                .first_text_input()
+                .expect("the target entry should be painted");
+            let entry_center = target_entry.rect.center();
+
+            editor.dispatch_event(Event::primary_press(entry_center));
+
+            let focused = editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the focused target entry should remain painted");
+            assert!(focused.focused);
+            assert_eq!(focused.state.value, format_target_text(target_db));
+            assert!(
+                focused.rect.width() >= 52.0,
+                "focused target entry needs enough content width for its caret: {:?}",
+                focused.rect
+            );
+        }
     }
 
     #[test]

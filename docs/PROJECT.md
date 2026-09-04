@@ -5,8 +5,10 @@
 GainSnap measures an incoming track peak while Match is enabled, applies the
 gain needed to reach a chosen target when Match is disabled, and holds that
 gain until the next measurement. Normalize sets the target to 0 dBFS and
-starts Match in one click. The vertical bar shows realtime incoming (IN) and
-adjusted (OUT) peak markers.
+starts Match in one click. The vertical meter shows a smoothed incoming peak
+in realtime as one thick orange column, with a small dB scale at its left edge.
+A small triangle beside the meter marks the target and acts as the target
+control.
 
 ## Constraints
 

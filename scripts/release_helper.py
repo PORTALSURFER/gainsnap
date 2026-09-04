@@ -31,9 +31,63 @@ SAFE_BUILD_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{1,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
 NOTARY_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
-SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+BASE_VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+SEMVER = re.compile(rf"{BASE_VERSION}(?:-[0-9A-Za-z.-]+)?\Z")
+CORE_SEMVER = re.compile(rf"{BASE_VERSION}\Z")
+RELEASE_CHANNELS = frozenset(("stable", "rc", "nightly"))
+CHANNEL_VERSION_PATTERNS = {
+    "stable": re.compile(rf"{BASE_VERSION}\Z"),
+    "rc": re.compile(rf"{BASE_VERSION}-rc\.[1-9][0-9]*\Z"),
+    "nightly": re.compile(rf"{BASE_VERSION}-nightly\.[1-9][0-9]*\Z"),
+}
+WORKFLOW_SEQUENCE = re.compile(r"[1-9][0-9]*\Z")
 SCREENSHOT_WIDTH = 300
 SCREENSHOT_HEIGHT = 320
+
+
+def _parse_core_version(version: Any, *, field: str) -> tuple[int, int, int]:
+    if not isinstance(version, str) or CORE_SEMVER.fullmatch(version) is None:
+        raise ValueError(f"{field} must be a numeric semver")
+    return tuple(int(part) for part in version.split("."))
+
+
+def _parse_channel_version(version: Any, channel: Any, *, field: str) -> tuple[int, int, int]:
+    if not isinstance(channel, str) or channel not in CHANNEL_VERSION_PATTERNS:
+        raise ValueError(f"{field} has an invalid release channel")
+    if not isinstance(version, str) or CHANNEL_VERSION_PATTERNS[channel].fullmatch(version) is None:
+        raise ValueError(f"{field} does not match the {channel} release version syntax")
+    return _parse_core_version(version.split("-", 1)[0], field=field)
+
+
+def validate_channel_version(version: str, channel: str) -> None:
+    _parse_channel_version(version, channel, field="publication version")
+
+
+def validate_publication_version(package_version: str, publication_version: str, channel: str) -> None:
+    package_core = _parse_core_version(package_version, field="package version")
+    publication_core = _parse_channel_version(publication_version, channel, field="publication version")
+    if publication_core != package_core:
+        raise ValueError(
+            f"publication version {publication_version} does not match package version {package_version}"
+        )
+
+
+def derive_publication_version(package_version: str, channel: str, sequence: Any) -> str:
+    if not isinstance(channel, str) or channel not in RELEASE_CHANNELS:
+        raise ValueError(f"invalid release channel: {channel}")
+    package_text = ".".join(str(part) for part in _parse_core_version(package_version, field="package version"))
+    if channel == "stable":
+        publication_version = package_text
+    else:
+        if (
+            not isinstance(sequence, (str, int))
+            or isinstance(sequence, bool)
+            or WORKFLOW_SEQUENCE.fullmatch(str(sequence)) is None
+        ):
+            raise ValueError("non-stable publication versions require a positive workflow sequence")
+        publication_version = f"{package_text}-{channel}.{sequence}"
+    validate_publication_version(package_text, publication_version, channel)
+    return publication_version
 
 
 def canonical_json(value: Any) -> bytes:
@@ -99,16 +153,9 @@ def build_manifest(*, product: str, repository: str, version: str, build_id: str
         raise ValueError("unknown or mismatched Portal product")
     if channel not in {"stable", "rc", "nightly"}:
         raise ValueError("invalid release channel")
-    if not SEMVER.fullmatch(version):
-        raise ValueError("version must be SemVer")
+    validate_channel_version(version, channel)
     if not SAFE_BUILD_ID.fullmatch(build_id):
         raise ValueError("invalid safe build id")
-    if "+" in version:
-        raise ValueError("release versions may not contain build metadata")
-    if channel == "stable" and ("-" in version or "+" in version):
-        raise ValueError("stable releases require a stable SemVer")
-    if channel == "rc" and not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*", version):
-        raise ValueError("RC releases require X.Y.Z-rc.N")
     try:
         parsed = dt.datetime.fromisoformat(released_at.replace("Z", "+00:00"))
     except ValueError as error:
@@ -211,12 +258,9 @@ def validate_manifest(manifest: dict[str, Any], root: Path) -> None:
         raise ValueError("manifest notarization evidence is invalid")
     if not isinstance(manifest["channel"], str) or manifest["channel"] not in {"stable", "rc", "nightly"}:
         raise ValueError("manifest channel is invalid")
-    if not isinstance(manifest["build_id"], str) or not isinstance(version, str) or not SAFE_BUILD_ID.fullmatch(manifest["build_id"]) or not SEMVER.fullmatch(version) or "+" in version:
+    if not isinstance(manifest["build_id"], str) or not SAFE_BUILD_ID.fullmatch(manifest["build_id"]):
         raise ValueError("manifest version/build id is invalid")
-    if manifest["channel"] == "stable" and "-" in version:
-        raise ValueError("stable manifest cannot contain prerelease metadata")
-    if manifest["channel"] == "rc" and not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*", version):
-        raise ValueError("RC manifest version is invalid")
+    validate_channel_version(version, manifest["channel"])
     try:
         released_at = dt.datetime.fromisoformat(str(manifest["released_at"]).replace("Z", "+00:00"))
     except ValueError as error:

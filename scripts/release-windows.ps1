@@ -2,6 +2,14 @@ param(
     [ValidateSet("stable", "rc", "nightly")]
     [string] $Channel = "stable",
     [Parameter(Mandatory = $true)]
+    [string] $PackageVersion,
+    [Parameter(Mandatory = $true)]
+    [string] $PublicationVersion,
+    [Parameter(Mandatory = $true)]
+    [string] $BuildId,
+    [Parameter(Mandatory = $true)]
+    [string] $ReleasedAt,
+    [Parameter(Mandatory = $true)]
     [string] $SourceSha,
     [string] $Formats = "clap,vst3"
 )
@@ -164,9 +172,34 @@ if ($status) {
 $metadataJson = Invoke-NativeOutput -File "cargo" -Arguments @("metadata", "--quiet", "--locked", "--no-deps", "--format-version", "1")
 $metadata = $metadataJson | ConvertFrom-Json
 $package = @($metadata.packages)[0]
-$version = [string] $package.version
-if ($version -notmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$") {
-    throw "unsupported package version for Windows release: $version"
+$metadataPackageVersion = [string] $package.version
+if ($metadataPackageVersion -cne $PackageVersion) {
+    throw "requested package version $PackageVersion does not match Cargo.toml $metadataPackageVersion"
+}
+$coreVersionPattern = "(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+if ($PackageVersion -cnotmatch "^$coreVersionPattern$") {
+    throw "unsupported package version for Windows release: $PackageVersion"
+}
+$publicationPattern = switch ($Channel) {
+    "stable" { "^$coreVersionPattern$"; break }
+    "rc" { "^$coreVersionPattern-rc\.[1-9][0-9]*$"; break }
+    "nightly" { "^$coreVersionPattern-nightly\.[1-9][0-9]*$"; break }
+}
+if ($PublicationVersion -cnotmatch $publicationPattern) {
+    throw "publication version $PublicationVersion does not match the $Channel release version syntax"
+}
+$publicationCore = ($PublicationVersion -split "-", 2)[0]
+if ($publicationCore -cne $PackageVersion) {
+    throw "publication version $PublicationVersion does not match package version $PackageVersion"
+}
+if ([string]::IsNullOrWhiteSpace($ReleasedAt) -or $ReleasedAt -cnotmatch "(?:Z|[+-][0-9]{2}:?[0-9]{2})$") {
+    throw "ReleasedAt must be an RFC3339 timestamp with a timezone"
+}
+try {
+    [DateTimeOffset]::Parse($ReleasedAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) | Out-Null
+}
+catch {
+    throw "ReleasedAt must be an RFC3339 timestamp: $ReleasedAt"
 }
 
 $requestedFormats = @(
@@ -187,9 +220,13 @@ foreach ($format in $requestedFormats) {
     }
 }
 
-$bundleStem = "$slug-v$version"
+$bundleStem = "$slug-v$PackageVersion"
 $distRoot = Join-Path $repoRoot "dist"
-$releaseId = "$Channel-$bundleStem-windows-unsigned-$($SourceSha.Substring(0, 12))"
+$expectedBuildId = "$slug-v$PublicationVersion-$($SourceSha.Substring(0, 12))"
+if ($BuildId -cnotmatch "^[a-z0-9][a-z0-9._-]{1,127}$" -or $BuildId -cne $expectedBuildId) {
+    throw "BuildId must be $expectedBuildId"
+}
+$releaseId = "$BuildId-windows-unsigned"
 $releaseRoot = Join-Path $distRoot (Join-Path "releases\windows" $releaseId)
 if (Test-Path -LiteralPath $releaseRoot) {
     throw "refusing to overwrite existing Windows release directory: $releaseRoot"
@@ -235,7 +272,7 @@ foreach ($format in $requestedFormats) {
         throw "Toybox produced an empty Windows $format binary: $binaryPath"
     }
 
-    $archiveName = "$bundleStem-windows-unsigned.$format.zip"
+    $archiveName = "$slug-v$PublicationVersion-windows-unsigned.$format.zip"
     $archivePath = Join-Path $releaseRoot $archiveName
     $expectedMember = if ($format -eq "vst3") {
         "$bundleStem.vst3/Contents/x86_64-win/$bundleStem.vst3"

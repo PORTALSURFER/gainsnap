@@ -333,18 +333,9 @@ impl VerticalSlider {
         Some(SliderMessage::ValueChanged { value })
     }
 
-    fn keyboard_step_db(&self) -> f32 {
-        if self.shift_held {
-            VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB
-        } else {
-            VERTICAL_SLIDER_KEYBOARD_STEP_DB
-        }
-    }
-
-    fn step_value(&mut self, direction: f32) -> Option<SliderMessage> {
+    fn step_value(&mut self, direction: TargetStepDirection) -> Option<SliderMessage> {
         let target_db = TARGET_RANGE.denormalize(self.value);
-        let next_target_db = (target_db + direction * self.keyboard_step_db())
-            .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
+        let next_target_db = step_target_db(target_db, direction, self.shift_held);
         self.set_value(TARGET_RANGE.normalize(next_target_db))
     }
 
@@ -429,12 +420,12 @@ impl Widget for VerticalSlider {
                 None
             }
             WidgetInput::KeyPress(key) if self.common.state.focused => match key {
-                WidgetKey::ArrowUp | WidgetKey::ArrowRight => {
-                    self.step_value(1.0).map(WidgetOutput::typed)
-                }
-                WidgetKey::ArrowDown | WidgetKey::ArrowLeft => {
-                    self.step_value(-1.0).map(WidgetOutput::typed)
-                }
+                WidgetKey::ArrowUp | WidgetKey::ArrowRight => self
+                    .step_value(TargetStepDirection::Up)
+                    .map(WidgetOutput::typed),
+                WidgetKey::ArrowDown | WidgetKey::ArrowLeft => self
+                    .step_value(TargetStepDirection::Down)
+                    .map(WidgetOutput::typed),
                 WidgetKey::Home => self.set_value(0.0).map(WidgetOutput::typed),
                 WidgetKey::End => self.set_value(1.0).map(WidgetOutput::typed),
                 _ => None,
@@ -676,6 +667,30 @@ impl ParamRange {
 const TARGET_RANGE: ParamRange = ParamRange::new(TARGET_MIN_DB, TARGET_MAX_DB, -12.0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TargetStepDirection {
+    Up,
+    Down,
+}
+
+impl TargetStepDirection {
+    fn sign(self) -> f32 {
+        match self {
+            Self::Up => 1.0,
+            Self::Down => -1.0,
+        }
+    }
+}
+
+fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bool) -> f32 {
+    let step_db = if shift_held {
+        VERTICAL_SLIDER_FINE_KEYBOARD_STEP_DB
+    } else {
+        VERTICAL_SLIDER_KEYBOARD_STEP_DB
+    };
+    (target_db + direction.sign() * step_db).clamp(TARGET_RANGE.min, TARGET_RANGE.max)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DisplaySnapshot {
     target_db: u32,
     match_requested: bool,
@@ -725,6 +740,7 @@ fn parse_target_text(text: &str) -> Option<f32> {
 enum EditorMessage {
     TargetChanged(f32),
     TargetTextChanged(TextInputMessage),
+    StepTarget(TargetStepDirection),
     Toggle { id: ClapId, checked: bool },
     Normalize,
 }
@@ -832,6 +848,17 @@ impl EditorState {
         self.target_text_param = self.parameter_value(PARAM_TARGET_DB, TARGET_RANGE);
     }
 
+    fn step_target(&mut self, direction: TargetStepDirection) {
+        let target_db = self.parameter_value(PARAM_TARGET_DB, TARGET_RANGE);
+        let next_target_db = step_target_db(target_db, direction, self.shift_held);
+        if (next_target_db - target_db).abs() > TARGET_TEXT_SYNC_EPSILON {
+            self.set_target_db(next_target_db);
+        } else {
+            self.target_text_param = target_db;
+        }
+        self.target_text = format_target_text(self.target_text_param);
+    }
+
     fn normalize(&mut self) {
         self.set_target_db(TARGET_MAX_DB);
         self.target_text = format_target_text(self.target_text_param);
@@ -922,6 +949,18 @@ impl GainSnapEditor {
     }
 
     fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
+        let direction = match key {
+            WidgetKey::ArrowUp => Some(TargetStepDirection::Up),
+            WidgetKey::ArrowDown => Some(TargetStepDirection::Down),
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            if self.runtime.focused_text_input_id().is_some() {
+                self.runtime
+                    .dispatch_message(EditorMessage::StepTarget(direction));
+                return true;
+            }
+        }
         self.runtime.dispatch_event(Event::key_press(key)).is_some()
     }
 
@@ -1088,6 +1127,7 @@ fn reduce_message(state: &mut EditorState, message: EditorMessage) {
                 state.target_text = format_target_text(state.target_text_param);
             }
         }
+        EditorMessage::StepTarget(direction) => state.step_target(direction),
         EditorMessage::Toggle { id, checked } => state.toggle_value(id, checked),
         EditorMessage::Normalize => state.normalize(),
     }
@@ -1102,6 +1142,51 @@ pub(crate) fn preferred_window_size() -> (u32, u32) {
 mod tests {
     use super::*;
     use radiant::widgets::PointerModifiers;
+    use std::sync::Mutex;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum EditEvent {
+        Begin(ClapId),
+        Value(ClapId, f64),
+        End(ClapId),
+    }
+
+    #[derive(Default)]
+    struct RecordingEditSink {
+        events: Mutex<Vec<EditEvent>>,
+    }
+
+    impl RecordingEditSink {
+        fn events(&self) -> Vec<EditEvent> {
+            self.events
+                .lock()
+                .expect("edit events should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl HostParamEditSink for RecordingEditSink {
+        fn gesture_started(&self, _config: &AutomationConfig, param_id: ClapId) {
+            self.events
+                .lock()
+                .expect("edit events should not be poisoned")
+                .push(EditEvent::Begin(param_id));
+        }
+
+        fn gesture_value(&self, _config: &AutomationConfig, param_id: ClapId, value: f64) {
+            self.events
+                .lock()
+                .expect("edit events should not be poisoned")
+                .push(EditEvent::Value(param_id, value));
+        }
+
+        fn gesture_ended(&self, _config: &AutomationConfig, param_id: ClapId) {
+            self.events
+                .lock()
+                .expect("edit events should not be poisoned")
+                .push(EditEvent::End(param_id));
+        }
+    }
 
     fn editor_state() -> EditorState {
         EditorState::new(
@@ -1299,6 +1384,204 @@ mod tests {
 
         editor.dispatch_event(Event::pointer_modifiers_changed(PointerModifiers::default()));
         assert!(!editor.runtime.bridge().state().shift_held);
+    }
+
+    #[test]
+    fn focused_target_entry_steps_with_arrows_and_preserves_focus() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let sink = Arc::new(RecordingEditSink::default());
+        let edit_sink: Arc<dyn HostParamEditSink> = sink.clone();
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            Some(edit_sink),
+        );
+        let entry_center = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should be painted")
+            .rect
+            .center();
+
+        editor.dispatch_event(Event::primary_press(entry_center));
+        editor.dispatch_event(Event::primary_release(entry_center));
+        assert!(editor.runtime.focused_text_input_id().is_some());
+
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert_eq!(params.target_db(), -11.0);
+        let entry = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should remain painted after stepping");
+        assert!(entry.focused);
+        assert_eq!(entry.state.value, "-11.0");
+
+        editor.dispatch_event(Event::pointer_modifiers_changed(PointerModifiers {
+            shift: true,
+            ..PointerModifiers::default()
+        }));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert_eq!(params.target_db(), -10.9);
+        let entry = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should remain painted after a fine step");
+        assert!(entry.focused);
+        assert_eq!(entry.state.value, "-10.9");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0], EditEvent::Begin(PARAM_TARGET_DB));
+        assert_eq!(events[1], EditEvent::Value(PARAM_TARGET_DB, -11.0));
+        assert_eq!(events[2], EditEvent::End(PARAM_TARGET_DB));
+        assert_eq!(events[3], EditEvent::Begin(PARAM_TARGET_DB));
+        assert!(matches!(
+            events[4],
+            EditEvent::Value(PARAM_TARGET_DB, value) if (value - -10.9).abs() < 0.0001
+        ));
+        assert_eq!(events[5], EditEvent::End(PARAM_TARGET_DB));
+    }
+
+    #[test]
+    fn focused_target_entry_keeps_caret_navigation_and_consumes_endpoint_steps() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_TARGET_DB, TARGET_MAX_DB);
+        let sink = Arc::new(RecordingEditSink::default());
+        let edit_sink: Arc<dyn HostParamEditSink> = sink.clone();
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            Some(edit_sink),
+        );
+        let entry = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should be painted")
+            .clone();
+        editor.dispatch_event(Event::primary_press(Point::new(
+            entry.rect.max.x - 1.0,
+            entry.rect.center().y,
+        )));
+        editor.dispatch_event(Event::primary_release(Point::new(
+            entry.rect.max.x - 1.0,
+            entry.rect.center().y,
+        )));
+        assert!(editor.runtime.focused_text_input_id().is_some());
+
+        let value_len = entry.state.value.chars().count();
+        assert_eq!(
+            editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the endpoint entry should remain painted")
+                .state
+                .caret,
+            value_len
+        );
+
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert_eq!(params.target_db(), TARGET_MAX_DB);
+        assert_eq!(sink.events(), Vec::<EditEvent>::new());
+        assert_eq!(
+            editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the endpoint entry should remain painted")
+                .state
+                .value,
+            "0.0"
+        );
+
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowLeft));
+        assert_eq!(
+            editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the target entry should remain painted")
+                .state
+                .caret,
+            value_len.saturating_sub(1)
+        );
+
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowRight));
+        assert_eq!(
+            editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the target entry should remain painted")
+                .state
+                .caret,
+            value_len
+        );
+
+        assert!(editor.dispatch_key_press(WidgetKey::Home));
+        assert_eq!(
+            editor
+                .paint_plan()
+                .first_text_input()
+                .expect("the target entry should remain painted")
+                .state
+                .caret,
+            0
+        );
+
+        assert!(editor.dispatch_key_press(WidgetKey::End));
+        let entry = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should remain painted");
+        assert_eq!(entry.state.caret, value_len);
+        assert!(entry.focused);
+        assert_eq!(params.target_db(), TARGET_MAX_DB);
+        assert_eq!(sink.events(), Vec::<EditEvent>::new());
+    }
+
+    #[test]
+    fn stepping_invalid_target_draft_uses_last_valid_parameter_and_formats_it() {
+        let mut state = editor_state();
+        state.params.set_param(PARAM_TARGET_DB, -6.5);
+        state.target_text = String::from("-");
+
+        reduce_message(
+            &mut state,
+            EditorMessage::StepTarget(TargetStepDirection::Up),
+        );
+
+        assert_eq!(state.parameter_value(PARAM_TARGET_DB, TARGET_RANGE), -5.5);
+        assert_eq!(state.target_text_param, -5.5);
+        assert_eq!(state.target_text, "-5.5");
+    }
+
+    #[test]
+    fn focused_target_entry_consumes_minimum_endpoint_without_a_gesture() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_TARGET_DB, TARGET_MIN_DB);
+        let sink = Arc::new(RecordingEditSink::default());
+        let edit_sink: Arc<dyn HostParamEditSink> = sink.clone();
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            Some(edit_sink),
+        );
+        let entry_center = editor
+            .paint_plan()
+            .first_text_input()
+            .expect("the target entry should be painted")
+            .rect
+            .center();
+        editor.dispatch_event(Event::primary_press(entry_center));
+        editor.dispatch_event(Event::primary_release(entry_center));
+
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowDown));
+        assert_eq!(params.target_db(), TARGET_MIN_DB);
+        assert!(sink.events().is_empty());
+        assert!(editor.runtime.focused_text_input_id().is_some());
     }
 
     #[test]

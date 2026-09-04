@@ -111,7 +111,7 @@ impl DefaultPluginFactory for GainSnapPlugin {
             .with_vendor("PORTALSURFER")
             .with_version(env!("CARGO_PKG_VERSION"))
             .with_description(
-                "Peak matching toggle with one-click 0 dBFS normalization and a smoothed realtime orange input meter: measure while enabled, apply gain when disabled, and hold the result",
+                "Realtime peak matching toggle with one-click 0 dBFS normalization and a smoothed orange post-gain output meter: correct while enabled, lock the final running-peak result when disabled, and hold it until the next measurement",
             )
             .with_features([plugin_features::AUDIO_EFFECT, plugin_features::STEREO])
     }

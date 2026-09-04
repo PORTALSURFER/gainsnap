@@ -5,7 +5,7 @@
 "display_name": "GainSnap",
 "category": "Utility",
 "tagline": "Toggle peak matching for Ableton tracks",
-"description": "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange incoming peak with a dB scale. A small triangle beside the meter marks the target and acts as the target control.",
+"description": "GainSnap tracks an incoming running peak while Match is enabled and applies bounded gain correction toward a chosen target in realtime. When Match is disabled, the final running-peak correction is locked until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange post-gain output peak with a dB scale. A small triangle beside the meter marks the target and acts as the target control.",
 "repository": "PORTALSURFER/gainsnap",
 "landing_path": "/plugins/gainsnap/",
 "release_api": "/plugins/api/v1/products/gainsnap/releases"

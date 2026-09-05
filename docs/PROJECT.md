@@ -15,6 +15,9 @@ use a slower 100 ms response than the 10 ms reductions. A stereo-linked sample
 peak guard caps matching output at the target, and otherwise caps output at
 0 dBFS, with immediate attack and 100 ms recovery. The fade continues if Match
 is disabled early. Output metering includes this protection.
+The startup fade follows the peak guard, bounding strong bursts throughout the
+fade. The 208 × 212 editor groups its controls tightly; the Match button and
+status dot share a pulse while Match is enabled.
 
 ## Constraints
 

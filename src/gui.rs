@@ -11,8 +11,8 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView, Widget,
-    WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    column, custom_widget, custom_widget_mapped, row, text_input, IntoView, Widget, WidgetCommon,
+    WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
 use radiant::runtime::{
@@ -22,8 +22,8 @@ use radiant::runtime::{
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, PointerCapturePolicy,
-    SliderMessage, TextInputMessage, TextWrap, WidgetCapabilities, WidgetId, WidgetSemantics,
-    WidgetStyle, WidgetTone,
+    SliderMessage, TextInputMessage, TextWrap, ToggleMessage, ToggleWidget, WidgetCapabilities,
+    WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -33,13 +33,13 @@ use crate::params::{PARAM_MATCH, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
 use crate::status::{GuiStatus, MatchState};
 
 /// Preferred logical editor width for the compact toggle control surface.
-pub const WINDOW_WIDTH: u32 = 300;
+pub const WINDOW_WIDTH: u32 = 208;
 /// Preferred logical editor height for the compact toggle control surface.
-pub const WINDOW_HEIGHT: u32 = 320;
+pub const WINDOW_HEIGHT: u32 = 212;
 /// Minimum logical editor width.
-pub const MIN_WINDOW_WIDTH: u32 = 300;
+pub const MIN_WINDOW_WIDTH: u32 = WINDOW_WIDTH;
 /// Minimum logical editor height.
-pub const MIN_WINDOW_HEIGHT: u32 = 320;
+pub const MIN_WINDOW_HEIGHT: u32 = WINDOW_HEIGHT;
 /// Maximum logical editor width.
 pub const MAX_WINDOW_WIDTH: u32 = 480;
 /// Maximum logical editor height.
@@ -50,16 +50,17 @@ const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
 // caret. Keep enough room for the longest formatted target (for example,
 // `-12.0`) to remain visible while it is being edited.
 const TARGET_CONTROL_WIDTH: f32 = 68.0;
-const TARGET_METER_HEIGHT: f32 = 176.0;
+const TARGET_METER_HEIGHT: f32 = 148.0;
 const TARGET_ENTRY_HEIGHT: f32 = 28.0;
-const TARGET_CONTROL_SPACING: f32 = 8.0;
-const ACTION_CONTROL_WIDTH: f32 = 112.0;
-const ACTION_CONTROL_HEIGHT: f32 = 212.0;
-const MATCHING_CONTROL_HEIGHT: f32 = 64.0;
-const MATCH_BUTTON_WIDTH: f32 = 108.0;
-const MATCH_BUTTON_HEIGHT: f32 = 38.0;
-const NORMALIZE_BUTTON_WIDTH: f32 = 88.0;
-const NORMALIZE_BUTTON_HEIGHT: f32 = 22.0;
+const TARGET_CONTROL_SPACING: f32 = 6.0;
+const ACTION_CONTROL_WIDTH: f32 = 96.0;
+const ACTION_CONTROL_HEIGHT: f32 =
+    TARGET_METER_HEIGHT + TARGET_CONTROL_SPACING + TARGET_ENTRY_HEIGHT;
+const MATCHING_CONTROL_HEIGHT: f32 = 62.0;
+const MATCH_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
+const MATCH_BUTTON_HEIGHT: f32 = 32.0;
+const NORMALIZE_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
+const NORMALIZE_BUTTON_HEIGHT: f32 = 24.0;
 const STATUS_INDICATOR_SIZE: f32 = 12.0;
 const TARGET_METER_TRACK_WIDTH: f32 = 14.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
@@ -77,8 +78,8 @@ const TARGET_METER_LABELS: [(&str, f32); 7] = [
 ];
 const TARGET_METER_LABEL_WIDTH: f32 = 23.0;
 const TARGET_METER_LABEL_GAP: f32 = 3.0;
-const TARGET_METER_LABEL_FONT_SIZE: f32 = 7.0;
-const TARGET_METER_LABEL_ALPHA: u8 = 148;
+const TARGET_METER_LABEL_FONT_SIZE: f32 = 8.0;
+const TARGET_METER_LABEL_ALPHA: u8 = 190;
 const TARGET_MARKER_GAP: f32 = 5.0;
 const TARGET_MARKER_WIDTH: f32 = 8.0;
 const TARGET_MARKER_HEIGHT: f32 = 8.0;
@@ -88,8 +89,9 @@ const METER_MAX_ELAPSED_SECONDS: f32 = 0.100;
 const METER_SETTLE_EPSILON_DB: f32 = 0.01;
 const TARGET_KEYBOARD_STEP_DB: f32 = 1.0;
 const TARGET_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
-const SURFACE_PADDING_X: f32 = 32.0;
-const SURFACE_COLUMN_GAP: f32 = 32.0;
+const SURFACE_PADDING_X: f32 = 16.0;
+const SURFACE_COLUMN_GAP: f32 = 12.0;
+const MATCH_PULSE_SECONDS: f32 = 1.2;
 
 const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target peak, dBFS";
 const NORMALIZE_AUTOMATION_LABEL: &str = "Normalize";
@@ -111,6 +113,8 @@ pub(crate) trait HostParamEditSink: Send + Sync {
 struct StatusIndicator {
     common: WidgetCommon,
     state: MatchState,
+    active: bool,
+    pulse_alpha: u8,
 }
 
 impl StatusIndicator {
@@ -123,7 +127,18 @@ impl StatusIndicator {
         common.paint.bounds = PaintBounds::ClipToRect;
         common.paint.paints_focus = false;
         common.paint.paints_state_layers = false;
-        Self { common, state }
+        Self {
+            common,
+            state,
+            active: false,
+            pulse_alpha: 255,
+        }
+    }
+
+    fn with_pulse(mut self, active: bool, alpha: u8) -> Self {
+        self.active = active;
+        self.pulse_alpha = alpha;
+        self
     }
 
     fn label(state: MatchState) -> &'static str {
@@ -136,12 +151,75 @@ impl StatusIndicator {
     }
 
     fn color(&self, theme: &ThemeTokens) -> Rgba8 {
+        if self.active {
+            return theme.accent_mint.with_alpha(self.pulse_alpha);
+        }
         match self.state {
             MatchState::Ready => theme.border_emphasis,
             MatchState::Measuring => theme.accent_mint,
             MatchState::Locked => theme.highlight_cyan,
             MatchState::NoSignal => theme.accent_danger,
         }
+    }
+}
+
+/// Keep Radiant's toggle input, focus, and automation behavior; only its active
+/// accent is animated using the same opacity as the status indicator.
+#[derive(Clone, Debug, PartialEq)]
+struct MatchButtonWidget {
+    toggle: ToggleWidget,
+    pulse_alpha: u8,
+}
+
+impl MatchButtonWidget {
+    fn new(checked: bool, pulse_alpha: u8) -> Self {
+        Self {
+            toggle: ToggleWidget::new(
+                0,
+                "MATCH",
+                WidgetSizing::fixed(Vector2::new(MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT)),
+            )
+            .with_checked(checked),
+            pulse_alpha,
+        }
+    }
+}
+
+impl Widget for MatchButtonWidget {
+    fn common(&self) -> &WidgetCommon {
+        self.toggle.common()
+    }
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        self.toggle.common_mut()
+    }
+    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
+        self.toggle
+            .handle_input(bounds, input)
+            .map(WidgetOutput::typed)
+    }
+    fn accepts_pointer_move(&self) -> bool {
+        false
+    }
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        self.toggle.capabilities()
+    }
+    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
+        if let Some(previous) = previous.as_any().downcast_ref::<Self>() {
+            self.toggle.synchronize_from_previous(&previous.toggle);
+        }
+    }
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        let mut theme = *theme;
+        if self.toggle.state.checked {
+            theme.accent_mint = theme.accent_mint.with_alpha(self.pulse_alpha);
+        }
+        self.toggle.append_paint(primitives, bounds, layout, &theme);
     }
 }
 
@@ -869,6 +947,8 @@ struct EditorState {
     shift_held: bool,
     output_peak_db: f32,
     meter_last_update: Instant,
+    pulse_started: Option<Instant>,
+    pulse_alpha: u8,
 }
 
 impl EditorState {
@@ -896,6 +976,8 @@ impl EditorState {
             shift_held: false,
             output_peak_db,
             meter_last_update: Instant::now(),
+            pulse_started: None,
+            pulse_alpha: 255,
         }
     }
 
@@ -906,6 +988,21 @@ impl EditorState {
         let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
         let changed = (next_db - self.output_peak_db).abs() > f32::EPSILON;
         self.output_peak_db = next_db;
+        changed
+    }
+
+    fn advance_pulse_at(&mut self, now: Instant) -> bool {
+        let next = if self.params.match_requested() {
+            let start = *self.pulse_started.get_or_insert(now);
+            let phase = now.saturating_duration_since(start).as_secs_f32() / MATCH_PULSE_SECONDS
+                * std::f32::consts::TAU;
+            (255.0 * (0.825 + 0.175 * phase.cos())).round() as u8
+        } else {
+            self.pulse_started = None;
+            255
+        };
+        let changed = next != self.pulse_alpha;
+        self.pulse_alpha = next;
         changed
     }
 
@@ -1060,12 +1157,10 @@ impl GainSnapEditor {
 
     fn paint_plan(&mut self) -> &SurfacePaintPlan {
         let display_snapshot = self.display_snapshot();
-        let meter_changed = self
-            .runtime
-            .bridge_mut()
-            .state_mut()
-            .advance_meter_at(Instant::now());
-        if display_snapshot != self.last_display_snapshot || meter_changed {
+        let now = Instant::now();
+        let meter_changed = self.runtime.bridge_mut().state_mut().advance_meter_at(now);
+        let pulse_changed = self.runtime.bridge_mut().state_mut().advance_pulse_at(now);
+        if display_snapshot != self.last_display_snapshot || meter_changed || pulse_changed {
             self.last_display_snapshot = display_snapshot;
             self.runtime.refresh();
         }
@@ -1083,6 +1178,7 @@ impl GainSnapEditor {
     fn needs_realtime_redraw(&self) -> bool {
         self.display_snapshot() != self.last_display_snapshot
             || self.runtime.bridge().state().meter_needs_realtime_redraw()
+            || self.runtime.bridge().state().params.match_requested()
     }
 
     fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
@@ -1187,15 +1283,17 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .width(TARGET_CONTROL_WIDTH)
         .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
-        toggle(
-            "MATCH",
-            state.params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
+        custom_widget_mapped(
+            MatchButtonWidget::new(state.params.match_requested(), state.pulse_alpha),
+            |message: ToggleMessage| {
+                let ToggleMessage::ValueChanged { checked } = message;
+                EditorMessage::Toggle {
+                    id: PARAM_MATCH,
+                    checked,
+                }
+            },
         )
         .style(WidgetStyle::normal(WidgetTone::Accent))
-        .message(|checked| EditorMessage::Toggle {
-            id: PARAM_MATCH,
-            checked,
-        })
         .key("match-now")
         .width(MATCH_BUTTON_WIDTH)
         .height(MATCH_BUTTON_HEIGHT),
@@ -1209,7 +1307,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(MATCHING_CONTROL_HEIGHT)
-    .spacing(4.0)
+    .spacing(6.0)
     .align_main(MainAlign::Center)
     .align_cross(CrossAlign::End);
     let target_control = column([target, target_entry])
@@ -1218,25 +1316,27 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .spacing(TARGET_CONTROL_SPACING)
         .align_cross(CrossAlign::Center);
     let action_control = column([
-        text("").height(32.0),
         matching,
-        text("").height(10.0),
-        custom_widget(StatusIndicator::new(match_state), |_output| None)
-            .key("status-indicator")
-            .size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)
-            .tooltip(StatusIndicator::label(match_state)),
+        custom_widget(
+            StatusIndicator::new(match_state)
+                .with_pulse(state.params.match_requested(), state.pulse_alpha),
+            |_output| None,
+        )
+        .key("status-indicator")
+        .size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)
+        .tooltip(StatusIndicator::label(match_state)),
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(ACTION_CONTROL_HEIGHT)
-    .spacing(4.0)
+    .spacing(10.0)
     .align_main(MainAlign::Center)
-    .align_cross(CrossAlign::End);
+    .align_cross(CrossAlign::Center);
     let view = row([target_control, action_control])
         .height(ACTION_CONTROL_HEIGHT)
         .spacing(SURFACE_COLUMN_GAP)
         .padding_x(SURFACE_PADDING_X)
-        .padding_y(24.0)
-        .align_main(MainAlign::Start)
+        .padding_y(15.0)
+        .align_main(MainAlign::Center)
         .align_cross(CrossAlign::Center)
         .fill_width()
         .fill_height();
@@ -1565,7 +1665,10 @@ mod tests {
         let mut meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
 
         let output = meter
-            .handle_input(bounds, WidgetInput::primary_press(Point::new(1.0, 88.0)))
+            .handle_input(
+                bounds,
+                WidgetInput::primary_press(Point::new(1.0, bounds.center().y)),
+            )
             .expect("the expanded rail should accept a press away from the visible meter");
         let SliderMessage::ValueChanged { value } = output
             .typed_copied::<SliderMessage>()
@@ -1916,7 +2019,7 @@ mod tests {
             )
             .paint_plan;
 
-        assert_eq!(preferred_window_size(), (300, 320));
+        assert_eq!(preferred_window_size(), (208, 212));
         assert!(plan.contains_text("MATCH"));
         assert!(plan.contains_text("Normalize"));
         for label in ["0 dB", "−6", "−12", "−18", "−24", "−30", "−∞"] {
@@ -2540,12 +2643,75 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         assert!(editor.needs_realtime_redraw());
         assert_eq!(match_fill_color(editor.paint_plan()), theme.accent_mint);
-        assert!(!editor.needs_realtime_redraw());
+        assert!(editor.needs_realtime_redraw());
 
         params.set_param(PARAM_MATCH, 0.0);
         assert!(editor.needs_realtime_redraw());
         assert_eq!(match_fill_color(editor.paint_plan()), theme.surface_raised);
         assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn matching_button_and_indicator_pulse_together_and_stop_when_off() {
+        let mut state = editor_state();
+        state.params.set_param(PARAM_MATCH, 1.0);
+        let start = Instant::now();
+        let mut colors = Vec::new();
+        for elapsed in [0, 600, 1_200] {
+            state.advance_pulse_at(start + Duration::from_millis(elapsed));
+            let plan = project_surface(&mut state)
+                .frame_at_size(
+                    Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                    &ThemeTokens::default(),
+                )
+                .paint_plan;
+            let id = plan.first_text_run("MATCH").unwrap().widget_id;
+            let button = plan
+                .fill_rects_for_widget(id)
+                .find(|fill| fill.rect.width() == MATCH_BUTTON_WIDTH)
+                .unwrap()
+                .color;
+            let dot = plan
+                .fill_polygons()
+                .find(|polygon| polygon.points.len() == 16)
+                .unwrap()
+                .color;
+            assert_eq!(button, dot);
+            colors.push(button);
+        }
+        assert_ne!(colors[0], colors[1]);
+        assert_eq!(colors[0], colors[2]);
+        state.params.set_param(PARAM_MATCH, 0.0);
+        state.advance_pulse_at(start + Duration::from_secs(2));
+        assert_eq!(state.pulse_alpha, 255);
+        assert!(state.pulse_started.is_none());
+        assert!(!state.advance_pulse_at(start + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn match_toggle_keeps_a_press_armed_across_pulse_refresh() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let plan = editor.paint_plan();
+        let id = plan.first_text_run("MATCH").unwrap().widget_id;
+        let bounds = plan.first_widget_rect(id).unwrap();
+        editor.dispatch_event(Event::primary_press(bounds.center()));
+        assert_eq!(editor.runtime.focused_widget(), Some(id));
+        editor.runtime.bridge_mut().state_mut().pulse_started =
+            Some(Instant::now() - Duration::from_millis(600));
+        editor.paint_plan();
+        assert_eq!(editor.runtime.focused_widget(), Some(id));
+        editor.dispatch_event(Event::primary_release(bounds.center()));
+        assert!(!params.match_requested());
+        editor.dispatch_key_press(WidgetKey::Space);
+        assert!(params.match_requested());
     }
 }
 
@@ -2565,31 +2731,45 @@ mod screenshot_tests {
             None,
             None,
         );
-        let plan = project_surface(&mut state)
-            .frame_at_size(
-                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
-                &ThemeTokens::default(),
-            )
-            .paint_plan;
         let mut capture = radiant::gui_runtime::OffscreenVelloCapture::new(
             Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
             DpiScale::ONE,
         )
         .expect("Radiant offscreen capture should be available");
-        let pixels = capture.capture(&plan).expect("screenshot should render");
         let root = std::env::var_os("TOYBOX_UI_SCREENSHOT_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("target/ui-screenshots"))
             .join("gainsnap");
         std::fs::create_dir_all(&root).expect("screenshot directory should be writable");
-        image::save_buffer_with_format(
-            root.join("initial-ui-300x320.png"),
-            &pixels,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-            ColorType::Rgba8,
-            ImageFormat::Png,
-        )
-        .expect("screenshot should be written");
+        for (name, matching, alpha) in [
+            ("initial-ui", false, 255),
+            ("matching-bright", true, 255),
+            ("matching-dim", true, 166),
+        ] {
+            state.params.set_param(PARAM_MATCH, f32::from(matching));
+            state.pulse_alpha = alpha;
+            if matching {
+                state
+                    .status
+                    .update(-6.0, -12.0, -6.0, 0.0, MatchState::Measuring);
+                state.output_peak_db = -12.0;
+            }
+            let plan = project_surface(&mut state)
+                .frame_at_size(
+                    Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                    &ThemeTokens::default(),
+                )
+                .paint_plan;
+            let pixels = capture.capture(&plan).expect("screenshot should render");
+            image::save_buffer_with_format(
+                root.join(format!("{name}-{WINDOW_WIDTH}x{WINDOW_HEIGHT}.png")),
+                &pixels,
+                WINDOW_WIDTH,
+                WINDOW_HEIGHT,
+                ColorType::Rgba8,
+                ImageFormat::Png,
+            )
+            .expect("screenshot should be written");
+        }
     }
 }

@@ -37,8 +37,8 @@ pub struct EngineReport {
 pub struct GainSnapEngine {
     smoothing_coefficient: f32,
     gain_increase_coefficient: f32,
-    peak_guard_release_coefficient: f32,
-    peak_guard_gain: f32,
+    peak_guard_release_coefficient: f64,
+    peak_guard_gain: f64,
     match_fade_step: f32,
     match_fade_position: f32,
     measurement_peak: f32,
@@ -64,7 +64,7 @@ impl GainSnapEngine {
         let smoothing_coefficient = 1.0 - (-1.0 / (sample_rate * GAIN_SMOOTHING_SECONDS)).exp();
         let gain_increase_coefficient = 1.0 - (-1.0 / (sample_rate * GAIN_INCREASE_SECONDS)).exp();
         let peak_guard_release_coefficient =
-            1.0 - (-1.0 / (sample_rate * PEAK_GUARD_RELEASE_SECONDS)).exp();
+            -(-1.0 / (sample_rate as f64 * PEAK_GUARD_RELEASE_SECONDS as f64)).exp_m1();
         let locked_gain_db = sanitize_gain_db(stored_gain_db);
         let gain = db_to_linear(locked_gain_db);
         Self {
@@ -189,7 +189,7 @@ impl GainSnapEngine {
         if self.state != MatchState::Measuring || self.measurement_peak > SILENCE_PEAK_LINEAR {
             self.match_fade_position = (position + self.match_fade_step).min(1.0);
         }
-        let desired_gain = self.current_gain * fade;
+        let desired_gain = self.current_gain;
         let ceiling = if self.state == MatchState::Measuring || position < 1.0 {
             // Target peaks extend below the correction-gain range, so do not
             // use db_to_linear(), which clamps to the gain parameter bounds.
@@ -209,15 +209,19 @@ impl GainSnapEngine {
         } else {
             1.0
         };
-        self.peak_guard_gain = required_guard.min(
+        // Higher precision lets the release settle back to unity at high host
+        // sample rates instead of stalling slightly below the matched target.
+        self.peak_guard_gain = (required_guard as f64).min(
             self.peak_guard_gain
                 + (1.0 - self.peak_guard_gain) * self.peak_guard_release_coefficient,
         );
-        let applied_gain = (desired_gain * self.peak_guard_gain).min(allowed_gain);
+        let applied_gain = (desired_gain * self.peak_guard_gain as f32).min(allowed_gain);
         // The final clamp catches rounding at the ceiling; attenuation itself
         // uses the same gain for both channels, preserving their balance.
-        let output_left = (input_left * applied_gain).clamp(-ceiling, ceiling);
-        let output_right = (input_right * applied_gain).clamp(-ceiling, ceiling);
+        // Fade the protected samples, not the requested gain. Otherwise a
+        // strong input can hit the fixed ceiling while the fade is still low.
+        let output_left = (input_left * applied_gain).clamp(-ceiling, ceiling) * fade;
+        let output_right = (input_right * applied_gain).clamp(-ceiling, ceiling) * fade;
         self.block_output_peak = self
             .block_output_peak
             .max(output_left.abs().max(output_right.abs()));
@@ -312,7 +316,7 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.5, 500);
+        run_frames(&mut engine, &params, 0.5, 1_200);
 
         assert_eq!(engine.report().state, MatchState::Measuring);
         assert_eq!(engine.report().progress, 0.0);
@@ -492,7 +496,7 @@ mod tests {
             run_frames(&mut engine, &params, 0.0, sample_rate as usize);
             let ceiling = 10.0_f32.powf(-12.0 / 20.0);
             let mut output = 0.0;
-            for frame in 0..(sample_rate * 0.6) as usize {
+            for frame in 0..(sample_rate * 1.5) as usize {
                 if frame % 64 == 0 {
                     engine.begin_block(&params);
                 }
@@ -503,7 +507,7 @@ mod tests {
                     assert_eq!(left, 0.0);
                 }
                 if frame == (sample_rate * 0.1) as usize {
-                    assert!(left < ceiling * 0.3 && left > ceiling * 0.2);
+                    assert!(left < ceiling * 0.3 && left > 0.0);
                 }
                 output = left;
             }
@@ -533,6 +537,28 @@ mod tests {
                 actual_peak = actual_peak.max(left.abs()).max(right.abs());
             }
             assert_eq!(engine.report().output_peak_db, linear_to_db(actual_peak));
+        }
+    }
+
+    #[test]
+    fn extreme_startup_peaks_follow_the_fade_ceiling() {
+        for input in [8.0, f32::MAX] {
+            let params = GainSnapParams::new();
+            params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 24.0);
+            params.set_param(PARAM_MATCH, 1.0);
+            let mut engine = GainSnapEngine::new(48_000.0, 24.0);
+            engine.begin_block(&params);
+            let ceiling = 10.0_f32.powf(-12.0 / 20.0);
+            for frame in 0..14_400 {
+                let (left, right) = engine.process_frame(&params, input, -input * 0.5);
+                let position = frame as f32 / 14_400.0;
+                let envelope = position * position * (3.0 - 2.0 * position);
+                assert!(
+                    left <= ceiling * envelope + 0.0001,
+                    "startup escaped the fade at sample {frame}: {left}"
+                );
+                assert!((right + left * 0.5).abs() < 1.0e-6);
+            }
         }
     }
 

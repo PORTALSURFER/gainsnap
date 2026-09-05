@@ -18,6 +18,8 @@ use 10 ms. A stereo-linked sample-peak guard reacts immediately to bursts and
 recovers over 100 ms: it caps output at the selected target while matching and
 during the fade, and at 0 dBFS afterward. Turning Match off early lets the fade
 finish. Protection adds no latency and the meter includes its attenuation.
+The fade is applied after peak protection, so even a strong startup burst stays
+under the rising fade ceiling.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
@@ -27,6 +29,9 @@ The vertical meter shows a smoothed output peak in realtime as one thick
 orange column, with a small dB scale at its left edge. A small triangle beside
 the meter marks the target and acts as the target control; the compact
 interface keeps the level overview visible without separate numeric readouts.
+The default editor is 208 × 212 logical pixels, with aligned action buttons and
+tighter spacing. Match and the status dot pulse together while Match is enabled,
+including when playback is silent.
 After the gain settles, the measured peak reaches the target when the required
 correction is within the supported ±24 dB range. Quieter passages read below the
 target; while matching, the peak guard contains newly encountered louder peaks

@@ -6,20 +6,37 @@ AudioDev plug-in repository (gainsnap), category **Utility**.
 
 ## Development
 
-GainSnap measures a stereo track's finite sample peak while Match is enabled,
-applies the bounded gain correction needed to reach the selected target when
-Match is disabled, and holds that correction until the next measurement. The
-Normalize button sets the target to 0 dBFS and starts Match in one click.
+While Match is enabled, GainSnap measures a stereo track's finite sample peak
+and continuously applies the bounded gain correction needed to reach the selected
+target. Disabling Match holds that correction. The Normalize button sets the
+target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
+
+Engaging Match fades the output up from silence over 300 ms, starting when usable
+audio arrives. Gain boosts use a slower 100 ms response, while gain reductions
+use 10 ms. A stereo-linked sample-peak guard reacts immediately to bursts and
+recovers over 100 ms: it caps output at the selected target while matching and
+during the fade, and at 0 dBFS afterward. Turning Match off early lets the fade
+finish. Protection adds no latency and the meter includes its attenuation.
+The fade is applied after peak protection, so even a strong startup burst stays
+under the rising fade ceiling.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the meter accepts direct dBFS entry as well.
 
-The vertical meter shows a smoothed incoming peak in realtime as one thick
+The vertical meter shows a smoothed output peak in realtime as one thick
 orange column, with a small dB scale at its left edge. A small triangle beside
 the meter marks the target and acts as the target control; the compact
 interface keeps the level overview visible without separate numeric readouts.
+The default editor is 208 × 212 logical pixels, with aligned action buttons and
+tighter spacing. Match and the status dot pulse together while Match is enabled,
+including when playback is silent.
+After the gain settles, the measured peak reaches the target when the required
+correction is within the supported ±24 dB range. Quieter passages read below the
+target; while matching, the peak guard contains newly encountered louder peaks
+as the gain settles. The guard limits sample peaks, rather than reconstructed
+intersample peaks.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 
@@ -42,7 +59,7 @@ VST3 bundle before returning.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange incoming peak with a dB scale and target marker."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale and target marker."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

@@ -11,8 +11,8 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    column, custom_widget, custom_widget_mapped, row, text, text_input, toggle, IntoView, Widget,
-    WidgetCommon, WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    column, custom_widget, custom_widget_mapped, row, text_input, IntoView, Widget, WidgetCommon,
+    WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
 use radiant::runtime::{
@@ -22,8 +22,8 @@ use radiant::runtime::{
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
     ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, PointerCapturePolicy,
-    SliderMessage, TextInputMessage, TextWrap, WidgetCapabilities, WidgetId, WidgetSemantics,
-    WidgetStyle, WidgetTone,
+    SliderMessage, TextInputMessage, TextWrap, ToggleMessage, ToggleWidget, WidgetCapabilities,
+    WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -33,13 +33,13 @@ use crate::params::{PARAM_MATCH, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
 use crate::status::{GuiStatus, MatchState};
 
 /// Preferred logical editor width for the compact toggle control surface.
-pub const WINDOW_WIDTH: u32 = 300;
+pub const WINDOW_WIDTH: u32 = 208;
 /// Preferred logical editor height for the compact toggle control surface.
-pub const WINDOW_HEIGHT: u32 = 320;
+pub const WINDOW_HEIGHT: u32 = 212;
 /// Minimum logical editor width.
-pub const MIN_WINDOW_WIDTH: u32 = 300;
+pub const MIN_WINDOW_WIDTH: u32 = WINDOW_WIDTH;
 /// Minimum logical editor height.
-pub const MIN_WINDOW_HEIGHT: u32 = 320;
+pub const MIN_WINDOW_HEIGHT: u32 = WINDOW_HEIGHT;
 /// Maximum logical editor width.
 pub const MAX_WINDOW_WIDTH: u32 = 480;
 /// Maximum logical editor height.
@@ -50,16 +50,17 @@ const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
 // caret. Keep enough room for the longest formatted target (for example,
 // `-12.0`) to remain visible while it is being edited.
 const TARGET_CONTROL_WIDTH: f32 = 68.0;
-const TARGET_METER_HEIGHT: f32 = 176.0;
+const TARGET_METER_HEIGHT: f32 = 148.0;
 const TARGET_ENTRY_HEIGHT: f32 = 28.0;
-const TARGET_CONTROL_SPACING: f32 = 8.0;
-const ACTION_CONTROL_WIDTH: f32 = 112.0;
-const ACTION_CONTROL_HEIGHT: f32 = 212.0;
-const MATCHING_CONTROL_HEIGHT: f32 = 64.0;
-const MATCH_BUTTON_WIDTH: f32 = 108.0;
-const MATCH_BUTTON_HEIGHT: f32 = 38.0;
-const NORMALIZE_BUTTON_WIDTH: f32 = 88.0;
-const NORMALIZE_BUTTON_HEIGHT: f32 = 22.0;
+const TARGET_CONTROL_SPACING: f32 = 6.0;
+const ACTION_CONTROL_WIDTH: f32 = 96.0;
+const ACTION_CONTROL_HEIGHT: f32 =
+    TARGET_METER_HEIGHT + TARGET_CONTROL_SPACING + TARGET_ENTRY_HEIGHT;
+const MATCHING_CONTROL_HEIGHT: f32 = 62.0;
+const MATCH_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
+const MATCH_BUTTON_HEIGHT: f32 = 32.0;
+const NORMALIZE_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
+const NORMALIZE_BUTTON_HEIGHT: f32 = 24.0;
 const STATUS_INDICATOR_SIZE: f32 = 12.0;
 const TARGET_METER_TRACK_WIDTH: f32 = 14.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
@@ -77,8 +78,8 @@ const TARGET_METER_LABELS: [(&str, f32); 7] = [
 ];
 const TARGET_METER_LABEL_WIDTH: f32 = 23.0;
 const TARGET_METER_LABEL_GAP: f32 = 3.0;
-const TARGET_METER_LABEL_FONT_SIZE: f32 = 7.0;
-const TARGET_METER_LABEL_ALPHA: u8 = 148;
+const TARGET_METER_LABEL_FONT_SIZE: f32 = 8.0;
+const TARGET_METER_LABEL_ALPHA: u8 = 190;
 const TARGET_MARKER_GAP: f32 = 5.0;
 const TARGET_MARKER_WIDTH: f32 = 8.0;
 const TARGET_MARKER_HEIGHT: f32 = 8.0;
@@ -88,8 +89,9 @@ const METER_MAX_ELAPSED_SECONDS: f32 = 0.100;
 const METER_SETTLE_EPSILON_DB: f32 = 0.01;
 const TARGET_KEYBOARD_STEP_DB: f32 = 1.0;
 const TARGET_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
-const SURFACE_PADDING_X: f32 = 32.0;
-const SURFACE_COLUMN_GAP: f32 = 32.0;
+const SURFACE_PADDING_X: f32 = 16.0;
+const SURFACE_COLUMN_GAP: f32 = 12.0;
+const MATCH_PULSE_SECONDS: f32 = 1.2;
 
 const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target peak, dBFS";
 const NORMALIZE_AUTOMATION_LABEL: &str = "Normalize";
@@ -111,6 +113,8 @@ pub(crate) trait HostParamEditSink: Send + Sync {
 struct StatusIndicator {
     common: WidgetCommon,
     state: MatchState,
+    active: bool,
+    pulse_alpha: u8,
 }
 
 impl StatusIndicator {
@@ -123,7 +127,18 @@ impl StatusIndicator {
         common.paint.bounds = PaintBounds::ClipToRect;
         common.paint.paints_focus = false;
         common.paint.paints_state_layers = false;
-        Self { common, state }
+        Self {
+            common,
+            state,
+            active: false,
+            pulse_alpha: 255,
+        }
+    }
+
+    fn with_pulse(mut self, active: bool, alpha: u8) -> Self {
+        self.active = active;
+        self.pulse_alpha = alpha;
+        self
     }
 
     fn label(state: MatchState) -> &'static str {
@@ -136,12 +151,75 @@ impl StatusIndicator {
     }
 
     fn color(&self, theme: &ThemeTokens) -> Rgba8 {
+        if self.active {
+            return theme.accent_mint.with_alpha(self.pulse_alpha);
+        }
         match self.state {
             MatchState::Ready => theme.border_emphasis,
             MatchState::Measuring => theme.accent_mint,
             MatchState::Locked => theme.highlight_cyan,
             MatchState::NoSignal => theme.accent_danger,
         }
+    }
+}
+
+/// Keep Radiant's toggle input, focus, and automation behavior; only its active
+/// accent is animated using the same opacity as the status indicator.
+#[derive(Clone, Debug, PartialEq)]
+struct MatchButtonWidget {
+    toggle: ToggleWidget,
+    pulse_alpha: u8,
+}
+
+impl MatchButtonWidget {
+    fn new(checked: bool, pulse_alpha: u8) -> Self {
+        Self {
+            toggle: ToggleWidget::new(
+                0,
+                "MATCH",
+                WidgetSizing::fixed(Vector2::new(MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT)),
+            )
+            .with_checked(checked),
+            pulse_alpha,
+        }
+    }
+}
+
+impl Widget for MatchButtonWidget {
+    fn common(&self) -> &WidgetCommon {
+        self.toggle.common()
+    }
+    fn common_mut(&mut self) -> &mut WidgetCommon {
+        self.toggle.common_mut()
+    }
+    fn handle_input(&mut self, bounds: Rect, input: WidgetInput) -> Option<WidgetOutput> {
+        self.toggle
+            .handle_input(bounds, input)
+            .map(WidgetOutput::typed)
+    }
+    fn accepts_pointer_move(&self) -> bool {
+        false
+    }
+    fn capabilities(&self) -> WidgetCapabilities<'_> {
+        self.toggle.capabilities()
+    }
+    fn synchronize_from_previous(&mut self, previous: &dyn Widget) {
+        if let Some(previous) = previous.as_any().downcast_ref::<Self>() {
+            self.toggle.synchronize_from_previous(&previous.toggle);
+        }
+    }
+    fn append_paint(
+        &self,
+        primitives: &mut Vec<PaintPrimitive>,
+        bounds: Rect,
+        layout: &radiant::layout::LayoutOutput,
+        theme: &ThemeTokens,
+    ) {
+        let mut theme = *theme;
+        if self.toggle.state.checked {
+            theme.accent_mint = theme.accent_mint.with_alpha(self.pulse_alpha);
+        }
+        self.toggle.append_paint(primitives, bounds, layout, &theme);
     }
 }
 
@@ -301,7 +379,7 @@ impl Widget for NormalizeButtonWidget {
     }
 }
 
-/// Compact target control that combines a realtime input meter with a draggable
+/// Compact target control that combines a realtime output meter with a draggable
 /// target marker. The full widget bounds are an intentionally wider invisible
 /// rail, so the small marker remains easy to grab without changing the visual
 /// proportions of the editor.
@@ -310,7 +388,7 @@ struct TargetMeter {
     common: WidgetCommon,
     value: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
 }
 
 impl TargetMeter {
@@ -327,7 +405,7 @@ impl TargetMeter {
             common,
             value: clamp_fraction(value),
             shift_held: false,
-            input_peak_db: -120.0,
+            output_peak_db: -120.0,
         }
     }
 
@@ -336,8 +414,8 @@ impl TargetMeter {
         self
     }
 
-    fn with_input_peak_db(mut self, input_peak_db: f32) -> Self {
-        self.input_peak_db = input_peak_db;
+    fn with_output_peak_db(mut self, output_peak_db: f32) -> Self {
+        self.output_peak_db = output_peak_db;
         self
     }
 
@@ -539,7 +617,7 @@ impl Widget for TargetMeter {
             primitives,
             self.common.id,
             track,
-            self.input_peak_db,
+            self.output_peak_db,
             theme.highlight_orange,
         );
         primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
@@ -807,7 +885,7 @@ fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bo
 struct DisplaySnapshot {
     target_db: u32,
     match_requested: bool,
-    input_peak_db: u32,
+    output_peak_db: u32,
     locked_gain_db: u32,
     progress: u32,
     state: MatchState,
@@ -822,7 +900,7 @@ impl DisplaySnapshot {
                 .clamp(TARGET_RANGE.min, TARGET_RANGE.max)
                 .to_bits(),
             match_requested: params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
-            input_peak_db: sanitize_meter_level_db(status.input_peak_db()).to_bits(),
+            output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
             locked_gain_db: status.locked_gain_db().to_bits(),
             progress: status.progress().to_bits(),
             state: status.state(),
@@ -867,8 +945,10 @@ struct EditorState {
     target_text: String,
     target_text_param: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
     meter_last_update: Instant,
+    pulse_started: Option<Instant>,
+    pulse_alpha: u8,
 }
 
 impl EditorState {
@@ -883,7 +963,7 @@ impl EditorState {
             .get_param(PARAM_TARGET_DB)
             .unwrap_or(TARGET_RANGE.default)
             .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
-        let input_peak_db = sanitize_meter_level_db(status.input_peak_db());
+        let output_peak_db = sanitize_meter_level_db(status.output_peak_db());
         Self {
             params,
             automation_queue,
@@ -894,24 +974,41 @@ impl EditorState {
             target_text: format_target_text(target_db),
             target_text_param: target_db,
             shift_held: false,
-            input_peak_db,
+            output_peak_db,
             meter_last_update: Instant::now(),
+            pulse_started: None,
+            pulse_alpha: 255,
         }
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
         let elapsed = now.saturating_duration_since(self.meter_last_update);
         self.meter_last_update = now;
-        let next_db = smooth_meter_level_db(self.input_peak_db, target_db, elapsed);
-        let changed = (next_db - self.input_peak_db).abs() > f32::EPSILON;
-        self.input_peak_db = next_db;
+        let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
+        let changed = (next_db - self.output_peak_db).abs() > f32::EPSILON;
+        self.output_peak_db = next_db;
+        changed
+    }
+
+    fn advance_pulse_at(&mut self, now: Instant) -> bool {
+        let next = if self.params.match_requested() {
+            let start = *self.pulse_started.get_or_insert(now);
+            let phase = now.saturating_duration_since(start).as_secs_f32() / MATCH_PULSE_SECONDS
+                * std::f32::consts::TAU;
+            (255.0 * (0.825 + 0.175 * phase.cos())).round() as u8
+        } else {
+            self.pulse_started = None;
+            255
+        };
+        let changed = next != self.pulse_alpha;
+        self.pulse_alpha = next;
         changed
     }
 
     fn meter_needs_realtime_redraw(&self) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
-        (self.input_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
+        (self.output_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
     }
 
     fn parameter_value(&self, id: ClapId, range: ParamRange) -> f32 {
@@ -1060,12 +1157,10 @@ impl GainSnapEditor {
 
     fn paint_plan(&mut self) -> &SurfacePaintPlan {
         let display_snapshot = self.display_snapshot();
-        let meter_changed = self
-            .runtime
-            .bridge_mut()
-            .state_mut()
-            .advance_meter_at(Instant::now());
-        if display_snapshot != self.last_display_snapshot || meter_changed {
+        let now = Instant::now();
+        let meter_changed = self.runtime.bridge_mut().state_mut().advance_meter_at(now);
+        let pulse_changed = self.runtime.bridge_mut().state_mut().advance_pulse_at(now);
+        if display_snapshot != self.last_display_snapshot || meter_changed || pulse_changed {
             self.last_display_snapshot = display_snapshot;
             self.runtime.refresh();
         }
@@ -1083,6 +1178,7 @@ impl GainSnapEditor {
     fn needs_realtime_redraw(&self) -> bool {
         self.display_snapshot() != self.last_display_snapshot
             || self.runtime.bridge().state().meter_needs_realtime_redraw()
+            || self.runtime.bridge().state().params.match_requested()
     }
 
     fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
@@ -1166,7 +1262,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let target = custom_widget_mapped(
         TargetMeter::new(TARGET_RANGE.normalize(target_db))
             .with_shift_held(state.shift_held)
-            .with_input_peak_db(state.input_peak_db),
+            .with_output_peak_db(state.output_peak_db),
         |message: SliderMessage| match message {
             SliderMessage::ValueChanged { value } => {
                 EditorMessage::TargetChanged(TARGET_RANGE.denormalize(value))
@@ -1187,15 +1283,17 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .width(TARGET_CONTROL_WIDTH)
         .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
-        toggle(
-            "MATCH",
-            state.params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
+        custom_widget_mapped(
+            MatchButtonWidget::new(state.params.match_requested(), state.pulse_alpha),
+            |message: ToggleMessage| {
+                let ToggleMessage::ValueChanged { checked } = message;
+                EditorMessage::Toggle {
+                    id: PARAM_MATCH,
+                    checked,
+                }
+            },
         )
         .style(WidgetStyle::normal(WidgetTone::Accent))
-        .message(|checked| EditorMessage::Toggle {
-            id: PARAM_MATCH,
-            checked,
-        })
         .key("match-now")
         .width(MATCH_BUTTON_WIDTH)
         .height(MATCH_BUTTON_HEIGHT),
@@ -1209,7 +1307,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(MATCHING_CONTROL_HEIGHT)
-    .spacing(4.0)
+    .spacing(6.0)
     .align_main(MainAlign::Center)
     .align_cross(CrossAlign::End);
     let target_control = column([target, target_entry])
@@ -1218,25 +1316,27 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .spacing(TARGET_CONTROL_SPACING)
         .align_cross(CrossAlign::Center);
     let action_control = column([
-        text("").height(32.0),
         matching,
-        text("").height(10.0),
-        custom_widget(StatusIndicator::new(match_state), |_output| None)
-            .key("status-indicator")
-            .size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)
-            .tooltip(StatusIndicator::label(match_state)),
+        custom_widget(
+            StatusIndicator::new(match_state)
+                .with_pulse(state.params.match_requested(), state.pulse_alpha),
+            |_output| None,
+        )
+        .key("status-indicator")
+        .size(STATUS_INDICATOR_SIZE, STATUS_INDICATOR_SIZE)
+        .tooltip(StatusIndicator::label(match_state)),
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(ACTION_CONTROL_HEIGHT)
-    .spacing(4.0)
+    .spacing(10.0)
     .align_main(MainAlign::Center)
-    .align_cross(CrossAlign::End);
+    .align_cross(CrossAlign::Center);
     let view = row([target_control, action_control])
         .height(ACTION_CONTROL_HEIGHT)
         .spacing(SURFACE_COLUMN_GAP)
         .padding_x(SURFACE_PADDING_X)
-        .padding_y(24.0)
-        .align_main(MainAlign::Start)
+        .padding_y(15.0)
+        .align_main(MainAlign::Center)
         .align_cross(CrossAlign::Center)
         .fill_width()
         .fill_height();
@@ -1511,20 +1611,20 @@ mod tests {
     fn target_meter_paints_single_full_width_orange_level_and_scale_labels() {
         let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
         let track = target_meter_track(bounds);
-        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_input_peak_db(-6.0);
+        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_output_peak_db(-6.0);
         let theme = ThemeTokens::default();
         let primitives = meter.paint_primitives_with_defaults(bounds);
 
-        let input = meter_level_rect(track, -6.0).expect("input level should be visible");
+        let output = meter_level_rect(track, -6.0).expect("output level should be visible");
         assert!(primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
-                if fill.rect == input && fill.color == theme.highlight_orange)
+                if fill.rect == output && fill.color == theme.highlight_orange)
         }));
         assert!(!primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
                 if fill.color == theme.highlight_cyan)
         }));
-        assert_eq!(input.width(), track.width());
+        assert_eq!(output.width(), track.width());
 
         let labels = primitives
             .iter()
@@ -1565,7 +1665,10 @@ mod tests {
         let mut meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0));
 
         let output = meter
-            .handle_input(bounds, WidgetInput::primary_press(Point::new(1.0, 88.0)))
+            .handle_input(
+                bounds,
+                WidgetInput::primary_press(Point::new(1.0, bounds.center().y)),
+            )
             .expect("the expanded rail should accept a press away from the visible meter");
         let SliderMessage::ValueChanged { value } = output
             .typed_copied::<SliderMessage>()
@@ -1916,7 +2019,7 @@ mod tests {
             )
             .paint_plan;
 
-        assert_eq!(preferred_window_size(), (300, 320));
+        assert_eq!(preferred_window_size(), (208, 212));
         assert!(plan.contains_text("MATCH"));
         assert!(plan.contains_text("Normalize"));
         for label in ["0 dB", "−6", "−12", "−18", "−24", "−30", "−∞"] {
@@ -2276,7 +2379,7 @@ mod tests {
             .fill_polygons()
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Measuring… toggle off to lock"));
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -12.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -12.0;
         assert!(!editor.needs_realtime_redraw());
 
         status.update(-6.0, -3.0, 3.0, 1.0, MatchState::Locked);
@@ -2287,7 +2390,7 @@ mod tests {
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Locked +3.00 dB"));
         assert!(editor.needs_realtime_redraw());
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -6.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -3.0;
         assert!(!editor.needs_realtime_redraw());
     }
 
@@ -2306,7 +2409,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_repaints_when_realtime_meter_level_moves() {
+    fn editor_repaints_when_only_output_level_moves() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         status.update(-24.0, -24.0, 0.0, 0.5, MatchState::Measuring);
@@ -2319,17 +2422,18 @@ mod tests {
         );
         let theme = ThemeTokens::default();
 
-        let initial_input = meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
+        let initial_output =
+            meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
 
-        status.update(-6.0, -12.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-24.0, -12.0, 0.0, 0.5, MatchState::Measuring);
         editor.runtime.bridge_mut().state_mut().meter_last_update =
             Instant::now() - Duration::from_millis(5);
         assert!(editor.needs_realtime_redraw());
         let plan = editor.paint_plan();
-        let updated_input = meter_level_rect_for_color(plan, theme.highlight_orange);
+        let updated_output = meter_level_rect_for_color(plan, theme.highlight_orange);
 
-        assert!(updated_input.min.y < initial_input.min.y);
-        assert_eq!(updated_input.width(), TARGET_METER_TRACK_WIDTH);
+        assert!(updated_output.min.y < initial_output.min.y);
+        assert_eq!(updated_output.width(), TARGET_METER_TRACK_WIDTH);
         assert!(!plan.primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
                 if fill.color == theme.highlight_cyan)
@@ -2337,7 +2441,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_ignores_output_only_telemetry_for_meter_repaint() {
+    fn editor_ignores_input_only_telemetry_for_meter_repaint() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         status.update(-12.0, -24.0, 0.0, 0.5, MatchState::Measuring);
@@ -2351,8 +2455,54 @@ mod tests {
         editor.paint_plan();
         assert!(!editor.needs_realtime_redraw());
 
-        status.update(-12.0, -3.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-3.0, -24.0, 0.0, 0.5, MatchState::Measuring);
         assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn matched_audio_paints_the_output_peak_at_the_target_while_on_and_off() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = crate::dsp::GainSnapEngine::new(48_000.0, 0.0);
+        engine.begin_block(&params);
+        for _ in 0..48_000 {
+            engine.process_frame(&params, 0.5, -0.25);
+        }
+
+        for matching in [true, false] {
+            params.set_param(PARAM_MATCH, f32::from(matching));
+            engine.begin_block(&params);
+            for _ in 0..256 {
+                engine.process_frame(&params, 0.5, -0.25);
+            }
+            let report = engine.report();
+            assert!((report.output_peak_db + 12.0).abs() < 0.001);
+            let status = Arc::new(GuiStatus::default());
+            status.update(
+                report.input_peak_db,
+                report.output_peak_db,
+                report.locked_gain_db,
+                report.progress,
+                report.state,
+            );
+            let mut editor = GainSnapEditor::new(
+                Arc::clone(&params),
+                Arc::new(AutomationQueue::default()),
+                status,
+                None,
+                None,
+            );
+            let plan = editor.paint_plan();
+            let track = plan
+                .stroke_rects()
+                .find(|stroke| stroke.rect.width() == TARGET_METER_TRACK_WIDTH)
+                .expect("meter frame should be painted")
+                .rect;
+            let output = meter_level_rect_for_color(plan, ThemeTokens::default().highlight_orange);
+            let target = meter_level_rect(track, -12.0).unwrap();
+            assert!((output.min.y - target.min.y).abs() < 0.01);
+            assert_eq!(output.max.y, target.max.y);
+        }
     }
 
     #[test]
@@ -2393,14 +2543,14 @@ mod tests {
             None,
             None,
         );
-        state.input_peak_db = -6.0;
+        state.output_peak_db = -6.0;
         let mut now = state.meter_last_update;
         for _ in 0..100 {
             now += Duration::from_millis(100);
             state.advance_meter_at(now);
         }
         assert!(!state.meter_needs_realtime_redraw());
-        assert_eq!(state.input_peak_db, -30.0);
+        assert_eq!(state.output_peak_db, -30.0);
     }
 
     #[test]
@@ -2493,12 +2643,75 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         assert!(editor.needs_realtime_redraw());
         assert_eq!(match_fill_color(editor.paint_plan()), theme.accent_mint);
-        assert!(!editor.needs_realtime_redraw());
+        assert!(editor.needs_realtime_redraw());
 
         params.set_param(PARAM_MATCH, 0.0);
         assert!(editor.needs_realtime_redraw());
         assert_eq!(match_fill_color(editor.paint_plan()), theme.surface_raised);
         assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn matching_button_and_indicator_pulse_together_and_stop_when_off() {
+        let mut state = editor_state();
+        state.params.set_param(PARAM_MATCH, 1.0);
+        let start = Instant::now();
+        let mut colors = Vec::new();
+        for elapsed in [0, 600, 1_200] {
+            state.advance_pulse_at(start + Duration::from_millis(elapsed));
+            let plan = project_surface(&mut state)
+                .frame_at_size(
+                    Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                    &ThemeTokens::default(),
+                )
+                .paint_plan;
+            let id = plan.first_text_run("MATCH").unwrap().widget_id;
+            let button = plan
+                .fill_rects_for_widget(id)
+                .find(|fill| fill.rect.width() == MATCH_BUTTON_WIDTH)
+                .unwrap()
+                .color;
+            let dot = plan
+                .fill_polygons()
+                .find(|polygon| polygon.points.len() == 16)
+                .unwrap()
+                .color;
+            assert_eq!(button, dot);
+            colors.push(button);
+        }
+        assert_ne!(colors[0], colors[1]);
+        assert_eq!(colors[0], colors[2]);
+        state.params.set_param(PARAM_MATCH, 0.0);
+        state.advance_pulse_at(start + Duration::from_secs(2));
+        assert_eq!(state.pulse_alpha, 255);
+        assert!(state.pulse_started.is_none());
+        assert!(!state.advance_pulse_at(start + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn match_toggle_keeps_a_press_armed_across_pulse_refresh() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let plan = editor.paint_plan();
+        let id = plan.first_text_run("MATCH").unwrap().widget_id;
+        let bounds = plan.first_widget_rect(id).unwrap();
+        editor.dispatch_event(Event::primary_press(bounds.center()));
+        assert_eq!(editor.runtime.focused_widget(), Some(id));
+        editor.runtime.bridge_mut().state_mut().pulse_started =
+            Some(Instant::now() - Duration::from_millis(600));
+        editor.paint_plan();
+        assert_eq!(editor.runtime.focused_widget(), Some(id));
+        editor.dispatch_event(Event::primary_release(bounds.center()));
+        assert!(!params.match_requested());
+        editor.dispatch_key_press(WidgetKey::Space);
+        assert!(params.match_requested());
     }
 }
 
@@ -2518,31 +2731,45 @@ mod screenshot_tests {
             None,
             None,
         );
-        let plan = project_surface(&mut state)
-            .frame_at_size(
-                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
-                &ThemeTokens::default(),
-            )
-            .paint_plan;
         let mut capture = radiant::gui_runtime::OffscreenVelloCapture::new(
             Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
             DpiScale::ONE,
         )
         .expect("Radiant offscreen capture should be available");
-        let pixels = capture.capture(&plan).expect("screenshot should render");
         let root = std::env::var_os("TOYBOX_UI_SCREENSHOT_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("target/ui-screenshots"))
             .join("gainsnap");
         std::fs::create_dir_all(&root).expect("screenshot directory should be writable");
-        image::save_buffer_with_format(
-            root.join("initial-ui-300x320.png"),
-            &pixels,
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-            ColorType::Rgba8,
-            ImageFormat::Png,
-        )
-        .expect("screenshot should be written");
+        for (name, matching, alpha) in [
+            ("initial-ui", false, 255),
+            ("matching-bright", true, 255),
+            ("matching-dim", true, 166),
+        ] {
+            state.params.set_param(PARAM_MATCH, f32::from(matching));
+            state.pulse_alpha = alpha;
+            if matching {
+                state
+                    .status
+                    .update(-6.0, -12.0, -6.0, 0.0, MatchState::Measuring);
+                state.output_peak_db = -12.0;
+            }
+            let plan = project_surface(&mut state)
+                .frame_at_size(
+                    Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                    &ThemeTokens::default(),
+                )
+                .paint_plan;
+            let pixels = capture.capture(&plan).expect("screenshot should render");
+            image::save_buffer_with_format(
+                root.join(format!("{name}-{WINDOW_WIDTH}x{WINDOW_HEIGHT}.png")),
+                &pixels,
+                WINDOW_WIDTH,
+                WINDOW_HEIGHT,
+                ColorType::Rgba8,
+                ImageFormat::Png,
+            )
+            .expect("screenshot should be written");
+        }
     }
 }

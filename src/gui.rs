@@ -2362,7 +2362,7 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = crate::dsp::GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
-        for _ in 0..9_600 {
+        for _ in 0..48_000 {
             engine.process_frame(&params, 0.5, -0.25);
         }
 

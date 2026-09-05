@@ -6,20 +6,23 @@ AudioDev plug-in repository (gainsnap), category **Utility**.
 
 ## Development
 
-GainSnap measures a stereo track's finite sample peak while Match is enabled,
-applies the bounded gain correction needed to reach the selected target when
-Match is disabled, and holds that correction until the next measurement. The
-Normalize button sets the target to 0 dBFS and starts Match in one click.
+While Match is enabled, GainSnap measures a stereo track's finite sample peak
+and continuously applies the bounded gain correction needed to reach the selected
+target. Disabling Match holds that correction. The Normalize button sets the
+target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the meter accepts direct dBFS entry as well.
 
-The vertical meter shows a smoothed incoming peak in realtime as one thick
+The vertical meter shows a smoothed output peak in realtime as one thick
 orange column, with a small dB scale at its left edge. A small triangle beside
 the meter marks the target and acts as the target control; the compact
 interface keeps the level overview visible without separate numeric readouts.
+After the gain settles, the measured peak reaches the target when the required
+correction is within the supported ±24 dB range. Quieter passages read below the
+target; newly encountered louder peaks can exceed it briefly as the gain slews.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 
@@ -42,7 +45,7 @@ VST3 bundle before returning.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, applies the gain needed to reach a chosen target when Match is disabled, and holds that gain until the next measurement. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange incoming peak with a dB scale and target marker."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale and target marker."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

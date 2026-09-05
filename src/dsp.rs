@@ -128,7 +128,7 @@ impl GainSnapEngine {
     /// Process one stereo frame without allocating, locking, or blocking.
     pub fn process_frame(
         &mut self,
-        _params: &GainSnapParams,
+        params: &GainSnapParams,
         input_left: f32,
         input_right: f32,
     ) -> (f32, f32) {
@@ -137,8 +137,11 @@ impl GainSnapEngine {
         let input_peak = input_left.abs().max(input_right.abs());
         self.block_input_peak = self.block_input_peak.max(input_peak);
 
-        if self.state == MatchState::Measuring {
-            self.measurement_peak = self.measurement_peak.max(input_peak);
+        if self.state == MatchState::Measuring && input_peak > self.measurement_peak {
+            self.measurement_peak = input_peak;
+            if self.measurement_peak > SILENCE_PEAK_LINEAR {
+                self.apply_measurement_gain(params);
+            }
         }
 
         self.current_gain += (self.target_gain - self.current_gain) * self.smoothing_coefficient;
@@ -172,16 +175,22 @@ impl GainSnapEngine {
     }
 
     fn finish_measurement(&mut self, params: &GainSnapParams) {
-        if self.measurement_peak < SILENCE_PEAK_LINEAR {
+        if self.measurement_peak <= SILENCE_PEAK_LINEAR {
             self.state = MatchState::NoSignal;
             return;
         }
+        self.apply_measurement_gain(params);
+        self.state = MatchState::Locked;
+    }
+
+    // Update from the unmodified input peak so the applied correction cannot
+    // feed back into the measurement. Only new peaks need a recalculation.
+    fn apply_measurement_gain(&mut self, params: &GainSnapParams) {
         let measured_db = linear_to_db(self.measurement_peak);
         let gain_db = (self.measurement_target_db - measured_db).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
         self.locked_gain_db = sanitize_gain_db(gain_db);
         self.target_gain = db_to_linear(self.locked_gain_db);
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, self.locked_gain_db);
-        self.state = MatchState::Locked;
     }
 }
 
@@ -231,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn turning_match_off_calculates_gain_and_holds_it() {
+    fn matching_applies_gain_live_and_turning_it_off_holds_it() {
         let params = GainSnapParams::new();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
@@ -241,7 +250,16 @@ mod tests {
 
         assert_eq!(engine.report().state, MatchState::Measuring);
         assert_eq!(engine.report().progress, 0.0);
-        assert!((engine.report().locked_gain_db - 0.0).abs() < 0.001);
+        assert!((engine.report().locked_gain_db - (-5.9794)).abs() < 0.02);
+        assert!((params.locked_gain_db() - engine.report().locked_gain_db).abs() < 0.001);
+        // Read a fresh block after the slew settles: telemetry must measure
+        // the samples we actually output while Match is still enabled.
+        engine.begin_block(&params);
+        let (left, right) = engine.process_frame(&params, 0.5, -0.5);
+        assert!((linear_to_db(left) - (-12.0)).abs() < 0.001);
+        assert_eq!(right, -left);
+        assert!((engine.report().output_peak_db - (-12.0)).abs() < 0.001);
+        assert!((engine.report().input_peak_db - (-6.0206)).abs() < 0.001);
 
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
@@ -253,6 +271,7 @@ mod tests {
         run_frames(&mut engine, &params, 0.25, 200);
         assert_eq!(engine.report().state, MatchState::Locked);
         assert!((engine.report().locked_gain_db - (-5.9794)).abs() < 0.02);
+        assert!((engine.report().output_peak_db - (-18.0206)).abs() < 0.001);
     }
 
     #[test]
@@ -264,11 +283,16 @@ mod tests {
         engine.begin_block(&params);
         run_frames(&mut engine, &params, 0.25, 500);
         assert_eq!(engine.report().state, MatchState::Measuring);
+        assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
 
         // The peak arrives after the old fixed 0.5 second window. It must
         // still participate in the result while Match remains enabled.
         run_frames(&mut engine, &params, 0.5, 2_000);
         assert_eq!(engine.report().state, MatchState::Measuring);
+        assert!((engine.report().locked_gain_db - (-5.9794)).abs() < 0.02);
+        engine.begin_block(&params);
+        run_frames(&mut engine, &params, 0.5, 64);
+        assert!((engine.report().output_peak_db + 12.0).abs() < 0.001);
 
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
@@ -315,6 +339,11 @@ mod tests {
         engine.begin_block(&params);
         run_frames(&mut engine, &params, 0.25, 100);
 
+        engine.begin_block(&params);
+        run_frames(&mut engine, &params, 0.25, 64);
+        assert_eq!(engine.report().state, MatchState::Measuring);
+        assert!(engine.report().output_peak_db.abs() < 0.001);
+
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
 
@@ -344,5 +373,45 @@ mod tests {
         let output = engine.process_frame(&params, f32::NAN, f32::INFINITY);
         assert_eq!(output, (0.0, 0.0));
         assert!(engine.report().input_peak_db <= -119.0);
+    }
+
+    #[test]
+    fn live_match_slews_and_toggle_off_does_not_change_audio() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        engine.begin_block(&params);
+        let first = engine.process_frame(&params, 0.5, 0.25).0;
+        assert!(first < 0.5 && first > 0.49);
+        let mut previous = first;
+        for _ in 0..9_600 {
+            let (left, right) = engine.process_frame(&params, 0.5, 0.25);
+            assert!(left <= previous);
+            assert_eq!(right, left * 0.5);
+            previous = left;
+        }
+        assert!((linear_to_db(previous) + 12.0).abs() < 0.001);
+
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.sync_controls(&params);
+        let held = engine.process_frame(&params, 0.5, 0.25).0;
+        assert!((held - previous).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn live_match_keeps_gain_bounded_and_ignores_silence_and_invalid_samples() {
+        for (input, expected_gain) in [(1.0e-5, GAIN_MAX_DB), (16.0, GAIN_MIN_DB)] {
+            let params = GainSnapParams::new();
+            params.set_param(PARAM_MATCH, 1.0);
+            let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+            engine.begin_block(&params);
+            run_frames(&mut engine, &params, input, 9_600);
+            assert_eq!(engine.report().locked_gain_db, expected_gain);
+            let output = engine.process_frame(&params, f32::NAN, f32::INFINITY);
+            assert_eq!(output, (0.0, 0.0));
+            run_frames(&mut engine, &params, 0.0, 9_600);
+            assert_eq!(params.locked_gain_db(), expected_gain);
+            assert!(engine.report().output_peak_db.is_finite());
+        }
     }
 }

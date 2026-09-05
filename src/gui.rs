@@ -301,7 +301,7 @@ impl Widget for NormalizeButtonWidget {
     }
 }
 
-/// Compact target control that combines a realtime input meter with a draggable
+/// Compact target control that combines a realtime output meter with a draggable
 /// target marker. The full widget bounds are an intentionally wider invisible
 /// rail, so the small marker remains easy to grab without changing the visual
 /// proportions of the editor.
@@ -310,7 +310,7 @@ struct TargetMeter {
     common: WidgetCommon,
     value: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
 }
 
 impl TargetMeter {
@@ -327,7 +327,7 @@ impl TargetMeter {
             common,
             value: clamp_fraction(value),
             shift_held: false,
-            input_peak_db: -120.0,
+            output_peak_db: -120.0,
         }
     }
 
@@ -336,8 +336,8 @@ impl TargetMeter {
         self
     }
 
-    fn with_input_peak_db(mut self, input_peak_db: f32) -> Self {
-        self.input_peak_db = input_peak_db;
+    fn with_output_peak_db(mut self, output_peak_db: f32) -> Self {
+        self.output_peak_db = output_peak_db;
         self
     }
 
@@ -539,7 +539,7 @@ impl Widget for TargetMeter {
             primitives,
             self.common.id,
             track,
-            self.input_peak_db,
+            self.output_peak_db,
             theme.highlight_orange,
         );
         primitives.push(PaintPrimitive::StrokeRect(PaintStrokeRect {
@@ -807,7 +807,7 @@ fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bo
 struct DisplaySnapshot {
     target_db: u32,
     match_requested: bool,
-    input_peak_db: u32,
+    output_peak_db: u32,
     locked_gain_db: u32,
     progress: u32,
     state: MatchState,
@@ -822,7 +822,7 @@ impl DisplaySnapshot {
                 .clamp(TARGET_RANGE.min, TARGET_RANGE.max)
                 .to_bits(),
             match_requested: params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
-            input_peak_db: sanitize_meter_level_db(status.input_peak_db()).to_bits(),
+            output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
             locked_gain_db: status.locked_gain_db().to_bits(),
             progress: status.progress().to_bits(),
             state: status.state(),
@@ -867,7 +867,7 @@ struct EditorState {
     target_text: String,
     target_text_param: f32,
     shift_held: bool,
-    input_peak_db: f32,
+    output_peak_db: f32,
     meter_last_update: Instant,
 }
 
@@ -883,7 +883,7 @@ impl EditorState {
             .get_param(PARAM_TARGET_DB)
             .unwrap_or(TARGET_RANGE.default)
             .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
-        let input_peak_db = sanitize_meter_level_db(status.input_peak_db());
+        let output_peak_db = sanitize_meter_level_db(status.output_peak_db());
         Self {
             params,
             automation_queue,
@@ -894,24 +894,24 @@ impl EditorState {
             target_text: format_target_text(target_db),
             target_text_param: target_db,
             shift_held: false,
-            input_peak_db,
+            output_peak_db,
             meter_last_update: Instant::now(),
         }
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
         let elapsed = now.saturating_duration_since(self.meter_last_update);
         self.meter_last_update = now;
-        let next_db = smooth_meter_level_db(self.input_peak_db, target_db, elapsed);
-        let changed = (next_db - self.input_peak_db).abs() > f32::EPSILON;
-        self.input_peak_db = next_db;
+        let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
+        let changed = (next_db - self.output_peak_db).abs() > f32::EPSILON;
+        self.output_peak_db = next_db;
         changed
     }
 
     fn meter_needs_realtime_redraw(&self) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.input_peak_db());
-        (self.input_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
+        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
+        (self.output_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
     }
 
     fn parameter_value(&self, id: ClapId, range: ParamRange) -> f32 {
@@ -1166,7 +1166,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     let target = custom_widget_mapped(
         TargetMeter::new(TARGET_RANGE.normalize(target_db))
             .with_shift_held(state.shift_held)
-            .with_input_peak_db(state.input_peak_db),
+            .with_output_peak_db(state.output_peak_db),
         |message: SliderMessage| match message {
             SliderMessage::ValueChanged { value } => {
                 EditorMessage::TargetChanged(TARGET_RANGE.denormalize(value))
@@ -1511,20 +1511,20 @@ mod tests {
     fn target_meter_paints_single_full_width_orange_level_and_scale_labels() {
         let bounds = Rect::from_size(TARGET_CONTROL_WIDTH, TARGET_METER_HEIGHT);
         let track = target_meter_track(bounds);
-        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_input_peak_db(-6.0);
+        let meter = TargetMeter::new(TARGET_RANGE.normalize(-12.0)).with_output_peak_db(-6.0);
         let theme = ThemeTokens::default();
         let primitives = meter.paint_primitives_with_defaults(bounds);
 
-        let input = meter_level_rect(track, -6.0).expect("input level should be visible");
+        let output = meter_level_rect(track, -6.0).expect("output level should be visible");
         assert!(primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
-                if fill.rect == input && fill.color == theme.highlight_orange)
+                if fill.rect == output && fill.color == theme.highlight_orange)
         }));
         assert!(!primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
                 if fill.color == theme.highlight_cyan)
         }));
-        assert_eq!(input.width(), track.width());
+        assert_eq!(output.width(), track.width());
 
         let labels = primitives
             .iter()
@@ -2276,7 +2276,7 @@ mod tests {
             .fill_polygons()
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Measuring… toggle off to lock"));
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -12.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -12.0;
         assert!(!editor.needs_realtime_redraw());
 
         status.update(-6.0, -3.0, 3.0, 1.0, MatchState::Locked);
@@ -2287,7 +2287,7 @@ mod tests {
             .any(|polygon| polygon.points.len() == 16));
         assert!(!plan.contains_text("Locked +3.00 dB"));
         assert!(editor.needs_realtime_redraw());
-        editor.runtime.bridge_mut().state_mut().input_peak_db = -6.0;
+        editor.runtime.bridge_mut().state_mut().output_peak_db = -3.0;
         assert!(!editor.needs_realtime_redraw());
     }
 
@@ -2306,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_repaints_when_realtime_meter_level_moves() {
+    fn editor_repaints_when_only_output_level_moves() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         status.update(-24.0, -24.0, 0.0, 0.5, MatchState::Measuring);
@@ -2319,17 +2319,18 @@ mod tests {
         );
         let theme = ThemeTokens::default();
 
-        let initial_input = meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
+        let initial_output =
+            meter_level_rect_for_color(editor.paint_plan(), theme.highlight_orange);
 
-        status.update(-6.0, -12.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-24.0, -12.0, 0.0, 0.5, MatchState::Measuring);
         editor.runtime.bridge_mut().state_mut().meter_last_update =
             Instant::now() - Duration::from_millis(5);
         assert!(editor.needs_realtime_redraw());
         let plan = editor.paint_plan();
-        let updated_input = meter_level_rect_for_color(plan, theme.highlight_orange);
+        let updated_output = meter_level_rect_for_color(plan, theme.highlight_orange);
 
-        assert!(updated_input.min.y < initial_input.min.y);
-        assert_eq!(updated_input.width(), TARGET_METER_TRACK_WIDTH);
+        assert!(updated_output.min.y < initial_output.min.y);
+        assert_eq!(updated_output.width(), TARGET_METER_TRACK_WIDTH);
         assert!(!plan.primitives.iter().any(|primitive| {
             matches!(primitive, PaintPrimitive::FillRect(fill)
                 if fill.color == theme.highlight_cyan)
@@ -2337,7 +2338,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_ignores_output_only_telemetry_for_meter_repaint() {
+    fn editor_ignores_input_only_telemetry_for_meter_repaint() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let status = Arc::new(GuiStatus::default());
         status.update(-12.0, -24.0, 0.0, 0.5, MatchState::Measuring);
@@ -2351,8 +2352,54 @@ mod tests {
         editor.paint_plan();
         assert!(!editor.needs_realtime_redraw());
 
-        status.update(-12.0, -3.0, 0.0, 0.5, MatchState::Measuring);
+        status.update(-3.0, -24.0, 0.0, 0.5, MatchState::Measuring);
         assert!(!editor.needs_realtime_redraw());
+    }
+
+    #[test]
+    fn matched_audio_paints_the_output_peak_at_the_target_while_on_and_off() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = crate::dsp::GainSnapEngine::new(48_000.0, 0.0);
+        engine.begin_block(&params);
+        for _ in 0..9_600 {
+            engine.process_frame(&params, 0.5, -0.25);
+        }
+
+        for matching in [true, false] {
+            params.set_param(PARAM_MATCH, f32::from(matching));
+            engine.begin_block(&params);
+            for _ in 0..256 {
+                engine.process_frame(&params, 0.5, -0.25);
+            }
+            let report = engine.report();
+            assert!((report.output_peak_db + 12.0).abs() < 0.001);
+            let status = Arc::new(GuiStatus::default());
+            status.update(
+                report.input_peak_db,
+                report.output_peak_db,
+                report.locked_gain_db,
+                report.progress,
+                report.state,
+            );
+            let mut editor = GainSnapEditor::new(
+                Arc::clone(&params),
+                Arc::new(AutomationQueue::default()),
+                status,
+                None,
+                None,
+            );
+            let plan = editor.paint_plan();
+            let track = plan
+                .stroke_rects()
+                .find(|stroke| stroke.rect.width() == TARGET_METER_TRACK_WIDTH)
+                .expect("meter frame should be painted")
+                .rect;
+            let output = meter_level_rect_for_color(plan, ThemeTokens::default().highlight_orange);
+            let target = meter_level_rect(track, -12.0).unwrap();
+            assert!((output.min.y - target.min.y).abs() < 0.01);
+            assert_eq!(output.max.y, target.max.y);
+        }
     }
 
     #[test]
@@ -2393,14 +2440,14 @@ mod tests {
             None,
             None,
         );
-        state.input_peak_db = -6.0;
+        state.output_peak_db = -6.0;
         let mut now = state.meter_last_update;
         for _ in 0..100 {
             now += Duration::from_millis(100);
             state.advance_meter_at(now);
         }
         assert!(!state.meter_needs_realtime_redraw());
-        assert_eq!(state.input_peak_db, -30.0);
+        assert_eq!(state.output_peak_db, -30.0);
     }
 
     #[test]

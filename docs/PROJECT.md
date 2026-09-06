@@ -21,13 +21,16 @@ fade. The 208 × 212 editor groups its controls tightly; the Match button and
 status dot share a pulse while Match is enabled. Both macOS and Windows use
 Toybox's native Radiant host, including keyboard, focus, and DPI conversion.
 
-The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). RMS uses 300 ms
-exponential mean-square averaging, bias-corrected during detector startup,
-with the louder channel setting the shared gain. It initially uses peak
-correction for 300 ms and holds gain during silence; after two seconds of
-silence, returning audio restarts the protected fade. The output meter uses
-the same RMS convention (full-scale square = 0 dBFS). The 0 dBFS sample-peak
-guard takes precedence over an unreachable RMS target. Normalize explicitly
+The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). RMS uses the strongest
+complete 300 ms sliding mean-square window, with the louder channel setting the
+shared gain. It initially uses peak correction until a complete window exists;
+zeroes after a hit remain part of that window. Later gaps and quieter passages
+do not raise gain, while newly stronger complete windows may update it. Restart
+Match to measure a quieter passage afresh. After two seconds of silence,
+returning audio restarts the protected fade. Requested RMS gain is bounded by the
+largest observed sample peak's 0 dBFS headroom; the sample peak guard remains the
+final safety net. The output meter shows the latest 300 ms sliding RMS window,
+using the same full-scale-square = 0 dBFS convention. Normalize explicitly
 selects Peak before setting 0 dBFS and engaging Match.
 
 State version 3 stores mode in previously reserved payload byte 5. Version 1

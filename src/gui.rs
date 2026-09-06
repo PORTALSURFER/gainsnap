@@ -21,9 +21,9 @@ use radiant::runtime::{
 };
 use radiant::theme::ThemeTokens;
 use radiant::widgets::{
-    ButtonMessage, ButtonWidget, FocusBehavior, PaintBounds, PointerButton, PointerCapturePolicy,
-    SliderMessage, TextInputMessage, TextWrap, ToggleMessage, ToggleWidget, WidgetCapabilities,
-    WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
+    ButtonMessage, ButtonWidget, FocusBehavior, KeyboardModifiers, PaintBounds, PointerButton,
+    PointerCapturePolicy, SliderMessage, TextInputMessage, TextWrap, ToggleMessage, ToggleWidget,
+    WidgetCapabilities, WidgetId, WidgetSemantics, WidgetStyle, WidgetTone,
 };
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
@@ -1199,7 +1199,14 @@ impl GainSnapEditor {
             || self.runtime.bridge().state().params.match_requested()
     }
 
-    fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
+    fn dispatch_key_press(&mut self, key: WidgetKey, modifiers: KeyboardModifiers) -> bool {
+        self.dispatch_event(Event::pointer_modifiers_changed(
+            radiant::widgets::PointerModifiers {
+                shift: modifiers.shift,
+                alt: modifiers.alt,
+                command: modifiers.command,
+            },
+        ));
         let direction = match key {
             WidgetKey::ArrowUp => Some(TargetStepDirection::Up),
             WidgetKey::ArrowDown => Some(TargetStepDirection::Down),
@@ -1212,7 +1219,14 @@ impl GainSnapEditor {
                 return true;
             }
         }
-        self.runtime.dispatch_event(Event::key_press(key)).is_some()
+        self.runtime
+            .dispatch_event(Event::KeyPress {
+                key,
+                modifiers,
+                repeat: false,
+                timestamp: None,
+            })
+            .is_some()
     }
 
     fn dispatch_character(&mut self, character: char) -> bool {
@@ -1239,8 +1253,8 @@ impl toybox::radiant_gui::RadiantEditor for GainSnapEditor {
         Self::needs_realtime_redraw(self)
     }
 
-    fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
-        Self::dispatch_key_press(self, key)
+    fn dispatch_key_press(&mut self, key: WidgetKey, modifiers: KeyboardModifiers) -> bool {
+        Self::dispatch_key_press(self, key, modifiers)
     }
 
     fn dispatch_character(&mut self, character: char) -> bool {
@@ -1874,6 +1888,72 @@ mod tests {
     }
 
     #[test]
+    fn hosted_keyboard_edits_numbers_and_steps_during_match_refresh() {
+        use toybox::radiant_gui::RadiantEditor;
+
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let center = editor
+            .paint_plan()
+            .first_text_input()
+            .unwrap()
+            .rect
+            .center();
+        editor.dispatch_event(Event::primary_press(center));
+        editor.dispatch_event(Event::primary_release(center));
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::End,
+            KeyboardModifiers::default()
+        ));
+        for _ in 0..5 {
+            assert!(RadiantEditor::dispatch_key_press(
+                &mut editor,
+                WidgetKey::Backspace,
+                KeyboardModifiers::default()
+            ));
+            editor.paint_plan();
+        }
+        for character in "-8.5".chars() {
+            assert!(RadiantEditor::dispatch_character(&mut editor, character));
+            editor.paint_plan();
+        }
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::Enter,
+            KeyboardModifiers::default()
+        ));
+        assert_eq!(params.target_db(), -8.5);
+        assert_eq!(
+            editor.paint_plan().first_text_input().unwrap().state.value,
+            "-8.5"
+        );
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::ArrowUp,
+            KeyboardModifiers::default()
+        ));
+        assert_eq!(params.target_db(), -7.5);
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::ArrowDown,
+            KeyboardModifiers {
+                shift: true,
+                ..KeyboardModifiers::default()
+            }
+        ));
+        assert_eq!(params.target_db(), -7.6);
+        assert!(editor.paint_plan().first_text_input().unwrap().focused);
+    }
+
+    #[test]
     fn focused_target_entry_steps_with_arrows_and_preserves_focus() {
         let params = Arc::new(crate::params::GainSnapParams::new());
         let sink = Arc::new(RecordingEditSink::default());
@@ -1896,7 +1976,7 @@ mod tests {
         editor.dispatch_event(Event::primary_release(entry_center));
         assert!(editor.runtime.focused_text_input_id().is_some());
 
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp, KeyboardModifiers::default()));
         assert_eq!(params.target_db(), -11.0);
         let entry = editor
             .paint_plan()
@@ -1909,7 +1989,13 @@ mod tests {
             shift: true,
             ..PointerModifiers::default()
         }));
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert!(editor.dispatch_key_press(
+            WidgetKey::ArrowUp,
+            KeyboardModifiers {
+                shift: true,
+                ..KeyboardModifiers::default()
+            }
+        ));
         assert_eq!(params.target_db(), -10.9);
         let entry = editor
             .paint_plan()
@@ -1970,7 +2056,7 @@ mod tests {
             value_len
         );
 
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowUp, KeyboardModifiers::default()));
         assert_eq!(params.target_db(), TARGET_MAX_DB);
         assert_eq!(sink.events(), Vec::<EditEvent>::new());
         assert_eq!(
@@ -1983,7 +2069,7 @@ mod tests {
             "0.0"
         );
 
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowLeft));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowLeft, KeyboardModifiers::default()));
         assert_eq!(
             editor
                 .paint_plan()
@@ -1994,7 +2080,7 @@ mod tests {
             value_len.saturating_sub(1)
         );
 
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowRight));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowRight, KeyboardModifiers::default()));
         assert_eq!(
             editor
                 .paint_plan()
@@ -2005,7 +2091,7 @@ mod tests {
             value_len
         );
 
-        assert!(editor.dispatch_key_press(WidgetKey::Home));
+        assert!(editor.dispatch_key_press(WidgetKey::Home, KeyboardModifiers::default()));
         assert_eq!(
             editor
                 .paint_plan()
@@ -2016,7 +2102,7 @@ mod tests {
             0
         );
 
-        assert!(editor.dispatch_key_press(WidgetKey::End));
+        assert!(editor.dispatch_key_press(WidgetKey::End, KeyboardModifiers::default()));
         let entry = editor
             .paint_plan()
             .first_text_input()
@@ -2065,7 +2151,7 @@ mod tests {
         editor.dispatch_event(Event::primary_press(entry_center));
         editor.dispatch_event(Event::primary_release(entry_center));
 
-        assert!(editor.dispatch_key_press(WidgetKey::ArrowDown));
+        assert!(editor.dispatch_key_press(WidgetKey::ArrowDown, KeyboardModifiers::default()));
         assert_eq!(params.target_db(), TARGET_MIN_DB);
         assert!(sink.events().is_empty());
         assert!(editor.runtime.focused_text_input_id().is_some());
@@ -2822,7 +2908,7 @@ mod tests {
         assert_eq!(editor.runtime.focused_widget(), Some(id));
         editor.dispatch_event(Event::primary_release(bounds.center()));
         assert!(!params.match_requested());
-        editor.dispatch_key_press(WidgetKey::Space);
+        editor.dispatch_key_press(WidgetKey::Space, KeyboardModifiers::default());
         assert!(params.match_requested());
     }
 }

@@ -15,12 +15,12 @@ vst3 = ["toybox/radiant-vst3", "radiant-gui"]
 screenshot-test = ["dep:image", "radiant-gui"]
 
 [dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "a69df15593a5cb9320993dde8d9908bfe857a9f6", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "6948da67576ba2ab8e525a5580585db109746d91", default-features = false }
 radiant = { git = "https://github.com/PORTALSURFER/radiant.git", rev = "c1343993c973bdece3e8cd469415b0d08c7f6cf1", default-features = false, optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [build-dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "a69df15593a5cb9320993dde8d9908bfe857a9f6", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "6948da67576ba2ab8e525a5580585db109746d91", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

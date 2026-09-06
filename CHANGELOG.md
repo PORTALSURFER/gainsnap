@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a saved, automatable PEAK/RMS mode toggle with RMS-based live matching and output metering.
+- Keep Normalize as peak normalization, automatically selecting PEAK mode.
+
 - Fade playing audio down briefly before starting Match, avoiding the immediate mute that caused clicks; preserve the audible gain through rapid restarts and target edits.
 - Improve gain-smoothing precision at high sample rates.
 - Enable the native Windows editor with shared keyboard, focus, and DPI support; validate its host lifecycle in Windows CI.

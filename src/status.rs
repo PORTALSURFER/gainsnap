@@ -36,6 +36,7 @@ impl MatchState {
 pub struct GuiStatus {
     input_peak_db: AtomicU32,
     output_peak_db: AtomicU32,
+    output_rms_db: AtomicU32,
     locked_gain_db: AtomicU32,
     progress: AtomicU32,
     state: AtomicU32,
@@ -53,6 +54,7 @@ impl GuiStatus {
         Self {
             input_peak_db: AtomicU32::new((-120.0_f32).to_bits()),
             output_peak_db: AtomicU32::new((-120.0_f32).to_bits()),
+            output_rms_db: AtomicU32::new((-120.0_f32).to_bits()),
             locked_gain_db: AtomicU32::new(0.0_f32.to_bits()),
             progress: AtomicU32::new(0.0_f32.to_bits()),
             state: AtomicU32::new(MatchState::Ready as u32),
@@ -79,6 +81,25 @@ impl GuiStatus {
         self.progress
             .store(progress.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
         self.state.store(state as u32, Ordering::Relaxed);
+    }
+
+    /// Publish protected output RMS without changing peak telemetry.
+    pub fn update_rms(&self, db: f32) {
+        self.output_rms_db
+            .store(sanitize_db(db).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read the selected output measurement for the editor.
+    #[cfg(all(
+        any(target_os = "macos", target_os = "windows"),
+        feature = "radiant-gui"
+    ))]
+    pub fn output_level_db(&self, rms: bool) -> f32 {
+        if rms {
+            read_f32(&self.output_rms_db)
+        } else {
+            self.output_peak_db()
+        }
     }
 
     /// Read the most recent input peak in decibels.

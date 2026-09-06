@@ -517,6 +517,7 @@ impl IAudioProcessorTrait for GainSnapVst3Processor {
         }
         apply_remaining_events(runtime, &self.shared.params);
         let report = runtime.engine.report();
+        self.shared.status.update_rms(report.output_rms_db);
         self.shared.status.update(
             report.input_peak_db,
             report.output_peak_db,

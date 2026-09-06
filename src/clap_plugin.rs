@@ -23,7 +23,7 @@ use toybox::events::{BlockEvent, BlockEventTimeline};
 use crate::dsp::GainSnapEngine;
 use crate::params::{
     param_count, text_to_value, value_to_text, write_param_info, GainSnapParams,
-    PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_TARGET_DB,
+    PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB,
 };
 use crate::state::{
     apply_snapshot, decode_payload, encode_payload, StateSnapshot, ACCEPTED_STATE_VERSIONS,
@@ -34,7 +34,7 @@ use crate::status::GuiStatus;
 /// Maximum number of CLAP parameter events retained for one process block.
 const CLAP_PARAMETER_EVENT_CAPACITY: usize = 256;
 /// Number of stable CLAP parameters with bounded overflow convergence slots.
-const CLAP_PARAMETER_COUNT: usize = 3;
+const CLAP_PARAMETER_COUNT: usize = crate::params::PARAM_DEFS.len();
 
 fn classify_clap_parameter(event: &UnknownEvent) -> Option<BlockEvent<(ClapId, f32), ()>> {
     match event.as_core_event() {
@@ -52,6 +52,7 @@ fn clap_parameter_index(param_id: ClapId) -> Option<usize> {
         PARAM_TARGET_DB => Some(0),
         PARAM_MATCH => Some(1),
         PARAM_LOCKED_GAIN_DB => Some(2),
+        PARAM_RMS_MODE => Some(3),
         _ => None,
     }
 }
@@ -342,6 +343,7 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
         self.apply_remaining_timeline();
 
         let report = self.engine.report();
+        self.shared.status.update_rms(report.output_rms_db);
         self.shared.status.update(
             report.input_peak_db,
             report.output_peak_db,

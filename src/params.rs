@@ -8,18 +8,20 @@ use toybox::clack_extensions::params::{ParamDisplayWriter, ParamInfoWriter};
 use toybox::clack_plugin::prelude::ClapId;
 use toybox::clap::params::{ParamBuilder, ParamSpec};
 
-/// Target peak parameter identifier.
+/// Target level parameter identifier.
 pub const PARAM_TARGET_DB: ClapId = ClapId::new(1);
 /// Match measurement toggle parameter identifier.
 pub const PARAM_MATCH: ClapId = ClapId::new(2);
 /// Read-only calculated gain parameter identifier.
 pub const PARAM_LOCKED_GAIN_DB: ClapId = ClapId::new(3);
+/// Peak (0) or RMS (1) matching and metering.
+pub const PARAM_RMS_MODE: ClapId = ClapId::new(4);
 
-/// Lowest supported target peak in dBFS.
+/// Lowest supported target level in dBFS.
 pub const TARGET_MIN_DB: f32 = -36.0;
-/// Highest supported target peak in dBFS, including the 0 dBFS normalize target.
+/// Highest supported target level in dBFS, including the 0 dBFS normalize target.
 pub const TARGET_MAX_DB: f32 = 0.0;
-/// Default target peak in dBFS.
+/// Default target level in dBFS.
 pub const DEFAULT_TARGET_DB: f32 = -12.0;
 /// Lowest gain correction GainSnap can apply.
 pub const GAIN_MIN_DB: f32 = -24.0;
@@ -66,10 +68,10 @@ impl ParamDef {
 }
 
 /// Parameters in stable host-visible order.
-pub const PARAM_DEFS: [ParamDef; 3] = [
+pub const PARAM_DEFS: [ParamDef; 4] = [
     ParamDef {
         id: PARAM_TARGET_DB,
-        name: b"Target Peak",
+        name: b"Target Level",
         module: b"Match",
         min: TARGET_MIN_DB as f64,
         max: TARGET_MAX_DB as f64,
@@ -97,6 +99,16 @@ pub const PARAM_DEFS: [ParamDef; 3] = [
         automatable: false,
         stepped: false,
     },
+    ParamDef {
+        id: PARAM_RMS_MODE,
+        name: b"Level Mode",
+        module: b"Match",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        automatable: true,
+        stepped: true,
+    },
 ];
 
 /// VST3 metadata corresponding to one shared parameter.
@@ -123,6 +135,7 @@ pub struct Vst3ParamInfo {
 pub struct GainSnapParams {
     target_db: AtomicF32,
     match_request: AtomicU32,
+    rms_mode: AtomicU32,
     locked_gain_db: AtomicF32,
 }
 
@@ -138,11 +151,12 @@ impl GainSnapParams {
         Self {
             target_db: AtomicF32::new(DEFAULT_TARGET_DB),
             match_request: AtomicU32::new(0),
+            rms_mode: AtomicU32::new(0),
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
         }
     }
 
-    /// Read the selected target peak in dBFS.
+    /// Read the selected target level in dBFS.
     pub fn target_db(&self) -> f32 {
         sanitize_target(self.target_db.load(Ordering::Relaxed))
     }
@@ -150,6 +164,11 @@ impl GainSnapParams {
     /// Read whether match measurement is currently enabled.
     pub fn match_requested(&self) -> bool {
         self.match_request.load(Ordering::Relaxed) != 0
+    }
+
+    /// Read whether RMS matching and metering are selected.
+    pub fn rms_mode(&self) -> bool {
+        self.rms_mode.load(Ordering::Relaxed) != 0
     }
 
     /// Read the last calculated gain correction in decibels.
@@ -163,6 +182,10 @@ impl GainSnapParams {
             PARAM_TARGET_DB => self
                 .target_db
                 .store(sanitize_target(value), Ordering::Relaxed),
+            PARAM_RMS_MODE => self.rms_mode.store(
+                u32::from(value.is_finite() && value >= 0.5),
+                Ordering::Relaxed,
+            ),
             PARAM_MATCH => self.match_request.store(
                 u32::from(value.is_finite() && value >= 0.5),
                 Ordering::Relaxed,
@@ -179,6 +202,7 @@ impl GainSnapParams {
         match id {
             PARAM_TARGET_DB => Some(self.target_db()),
             PARAM_MATCH => Some(f32::from(self.match_requested())),
+            PARAM_RMS_MODE => Some(f32::from(self.rms_mode())),
             PARAM_LOCKED_GAIN_DB => Some(self.locked_gain_db()),
             _ => None,
         }
@@ -201,6 +225,7 @@ pub fn write_param_info(index: u32, writer: &mut ParamInfoWriter) {
 pub fn value_to_text(id: ClapId, value: f64, writer: &mut ParamDisplayWriter) -> std::fmt::Result {
     match id {
         PARAM_TARGET_DB => write!(writer, "{:.1} dB", sanitize_target(value as f32)),
+        PARAM_RMS_MODE => write!(writer, "{}", if value >= 0.5 { "RMS" } else { "Peak" }),
         PARAM_MATCH => write!(writer, "{}", if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(writer, "{:+.2} dB", sanitize_gain(value as f32)),
         _ => Ok(()),
@@ -224,6 +249,8 @@ pub fn text_to_value(id: ClapId, text: &CStr) -> Option<f64> {
                     sanitize_gain(value) as f64
                 }
             }),
+        PARAM_RMS_MODE if raw.eq_ignore_ascii_case("rms") || raw == "1" => Some(1.0),
+        PARAM_RMS_MODE if raw.eq_ignore_ascii_case("peak") || raw == "0" => Some(0.0),
         PARAM_MATCH
             if raw.eq_ignore_ascii_case("ready")
                 || raw.eq_ignore_ascii_case("on")
@@ -242,6 +269,7 @@ pub fn format_value_text(id: ClapId, value: f64) -> Option<String> {
     let mut text = String::new();
     match id {
         PARAM_TARGET_DB => write!(&mut text, "{:.1} dB", sanitize_target(value as f32)).ok()?,
+        PARAM_RMS_MODE => text.push_str(if value >= 0.5 { "RMS" } else { "Peak" }),
         PARAM_MATCH => text.push_str(if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(&mut text, "{:+.2} dB", sanitize_gain(value as f32)).ok()?,
         _ => return None,
@@ -289,7 +317,7 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
     match index {
         0 => Some(Vst3ParamInfo {
             id: PARAM_TARGET_DB.get(),
-            title: "Target Peak",
+            title: "Target Level",
             short_title: "Target",
             units: "dBFS",
             step_count: 0,
@@ -316,6 +344,15 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
             step_count: 0,
             default_normalized: 0.5,
             automatable: false,
+        }),
+        3 => Some(Vst3ParamInfo {
+            id: PARAM_RMS_MODE.get(),
+            title: "Level Mode",
+            short_title: "Mode",
+            units: "",
+            step_count: 1,
+            default_normalized: 0.0,
+            automatable: true,
         }),
         _ => None,
     }
@@ -356,5 +393,32 @@ impl AtomicF32 {
 
     fn store(&self, value: f32, ordering: Ordering) {
         self.value.store(value.to_bits(), ordering);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn mode_has_a_new_stable_host_id_and_enumerated_values() {
+        assert_eq!(PARAM_DEFS.map(|def| def.id.get()), [1, 2, 3, 4]);
+        let params = GainSnapParams::new();
+        assert!(!params.rms_mode());
+        params.set_param(PARAM_RMS_MODE, 1.0);
+        assert_eq!(params.get_param(PARAM_RMS_MODE), Some(1.0));
+        assert_eq!(text_to_value(PARAM_RMS_MODE, c"RMS"), Some(1.0));
+        assert_eq!(text_to_value(PARAM_RMS_MODE, c"Peak"), Some(0.0));
+        params.set_param(PARAM_RMS_MODE, f32::NAN);
+        assert!(!params.rms_mode());
+        #[cfg(feature = "vst3")]
+        {
+            assert_eq!(vst3_param_info_for_index(3).unwrap().step_count, 1);
+            assert_eq!(
+                format_value_text(PARAM_RMS_MODE, 1.0).as_deref(),
+                Some("RMS")
+            );
+            assert!(apply_normalized_param_value(&params, PARAM_RMS_MODE, 1.0));
+            assert!(params.rms_mode());
+        }
     }
 }

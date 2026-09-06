@@ -5,6 +5,20 @@ Target repository: PORTALSURFER/gainsnap
 
 The publisher stage creates the per-product release credential used by GitHub Actions to publish this product. It generates the bearer value locally from 32 operating-system random bytes; you never enter or see that value. Only its SHA-256 hash is sent to PortalSurfer's fixed Compose-backed wrapper (`sh /opt/portalsurfer/hosting/audiodev-publisher-admin.sh` by default). The wrapper runs the helper in the isolated admin service and owns the private-file path. The raw value is sent only to the GitHub production environment secret and is then dropped.
 
+## GitHub Actions publisher integration
+
+The release workflow uses the generic PortalSurfer publisher from commit
+`12d2c089d3d135c6839013a097dbf3baebf5fdb3`. Configure
+`PORTALSURFER_PUBLISHER_APP_ID` as a repository variable and
+`PORTALSURFER_PUBLISHER_PRIVATE_KEY` as a secret in the protected
+`publisher-integration` environment. That job uses the key only to create a
+GitHub App token scoped to `PORTALSURFER/portalsurfer.org` with
+`contents:read`, verifies the pinned checkout, and passes the publisher script
+to the production macOS job as a same-run artifact. The existing
+`PORTALSURFER_RELEASE_TOKEN` remains the production upload secret. The Windows
+job receives none of the publisher, release-upload, Apple, or OIDC credentials.
+The bootstrapper and PortalSurfer source are unchanged by this product change.
+
 ## Preview
 
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- publisher --plugin /path/to/PLUGIN

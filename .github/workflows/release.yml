@@ -51,6 +51,7 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
       - name: Verify dispatched source SHA
         id: source
         env:
@@ -62,6 +63,7 @@ jobs:
           [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
           test "${source_sha}" = "${EXPECTED_SHA}"
           echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
+
       - name: Compute shared release metadata
         id: metadata
         env:
@@ -71,8 +73,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_version="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text(encoding="utf-8"))["package"]["version"])')"
-          publication_version="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${package_version}" "${RELEASE_CHANNEL}" "${WORKFLOW_SEQUENCE}" <<'PY'
+          package_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text(encoding="utf-8"))["package"]["version"])')"
+          publication_version="$(python3 - "${package_version}" "${RELEASE_CHANNEL}" "${WORKFLOW_SEQUENCE}" <<'PY'
           import pathlib
           import sys
 
@@ -91,6 +93,7 @@ jobs:
             echo "build_id=${build_id}"
             echo "released_at=${released_at}"
           } >> "$GITHUB_OUTPUT"
+
       - name: Check release source freshness
         id: gate
         env:
@@ -107,7 +110,7 @@ jobs:
           fi
           releases_json="${RUNNER_TEMP}/gainsnap-releases.json"
           curl --fail --silent --show-error --location --max-time 30 "${RELEASES_URL}" > "${releases_json}"
-          PYTHONDONTWRITEBYTECODE=1 python3 - "${SOURCE_SHA}" "${releases_json}" "${GITHUB_OUTPUT}" "${RELEASE_CHANNEL}" <<'PY'
+          python3 - "${SOURCE_SHA}" "${releases_json}" "${GITHUB_OUTPUT}" "${RELEASE_CHANNEL}" <<'PY'
           import datetime as dt
           import json
           import re
@@ -115,12 +118,7 @@ jobs:
           from pathlib import Path
 
           source_sha, releases_path, output_path, channel = sys.argv[1:]
-          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
-              raise SystemExit("checked-out source SHA is invalid")
-          try:
-              document = json.loads(Path(releases_path).read_text(encoding="utf-8"))
-          except (OSError, json.JSONDecodeError) as error:
-              raise SystemExit(f"could not validate public release history: {error}")
+          document = json.loads(Path(releases_path).read_text(encoding="utf-8"))
           releases = document.get("releases") if isinstance(document, dict) else None
           if not isinstance(releases, list):
               raise SystemExit("release history must contain a releases array")
@@ -128,39 +126,126 @@ jobs:
           for release in releases:
               if not isinstance(release, dict) or release.get("channel") != channel:
                   continue
-              released_at = release.get("released_at")
               source = release.get("source")
-              if not isinstance(released_at, str) or not isinstance(source, dict):
-                  raise SystemExit("matching release is missing source or timestamp")
-              if source.get("repository") != "PORTALSURFER/gainsnap":
-                  raise SystemExit("matching release source repository is invalid")
-              try:
-                  parsed = dt.datetime.fromisoformat(released_at.replace("Z", "+00:00"))
-              except ValueError as error:
-                  raise SystemExit(f"matching release timestamp is invalid: {error}")
+              timestamp = release.get("released_at")
+              candidate = source.get("git_sha") if isinstance(source, dict) else None
+              if (
+                  not isinstance(source, dict)
+                  or source.get("repository") != "PORTALSURFER/gainsnap"
+                  or not isinstance(timestamp, str)
+                  or not isinstance(candidate, str)
+                  or not re.fullmatch(r"[0-9a-f]{40}", candidate)
+              ):
+                  raise SystemExit("matching release source metadata is invalid")
+              parsed = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
               if parsed.tzinfo is None or parsed.utcoffset() is None:
                   raise SystemExit("matching release timestamp must include a timezone")
-              candidate_sha = source.get("git_sha")
-              if not isinstance(candidate_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
-                  raise SystemExit("matching release source SHA is invalid")
               if latest is None or parsed > latest[0]:
-                  latest = (parsed, candidate_sha)
-          should_release = latest is None or latest[1] != source_sha
+                  latest = (parsed, candidate)
           with Path(output_path).open("a", encoding="utf-8") as output:
-              output.write(f"should_release={str(should_release).lower()}\n")
-          print("release freshness decision: " + ("release" if should_release else "no-op"))
+              output.write(f"should_release={str(latest is None or latest[1] != source_sha).lower()}\n")
           PY
+
       - name: Stop when the selected channel is unchanged
-        if: ${{ steps.gate.outputs.should_release != 'true' }}
+        if: steps.gate.outputs.should_release != 'true'
         run: echo "selected release channel already contains this source SHA"
 
-  release:
-    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.should_release == 'true' && (inputs.channel != 'nightly' || needs.windows_artifacts.result == 'success') }}
-    needs: [prepare, windows_artifacts]
+  publisher_preflight_gate:
+    if: ${{ inputs.publish == true && needs.prepare.outputs.should_release == 'true' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: publisher-integration
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact prepared source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact prepared source identity
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SOURCE_SHA}"
+      - name: Verify protected publisher preflight evidence
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release_preflight_gate.py
+      - name: Create scoped PortalSurfer publisher token
+        id: publisher_token
+        uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94 # v2.2.0
+        with:
+          app-id: ${{ vars.PORTALSURFER_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.PORTALSURFER_PUBLISHER_PRIVATE_KEY }}
+          owner: PORTALSURFER
+          repositories: portalsurfer.org
+          permission-contents: read
+      - name: Checkout pinned PortalSurfer publisher
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: PORTALSURFER/portalsurfer.org
+          ref: 12d2c089d3d135c6839013a097dbf3baebf5fdb3
+          token: ${{ steps.publisher_token.outputs.token }}
+          path: portalsurfer-publisher
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify and stage pinned PortalSurfer publisher script
+        shell: bash
+        env:
+          PUBLISHER_COMMIT: 12d2c089d3d135c6839013a097dbf3baebf5fdb3
+        run: |
+          set -euo pipefail
+          publisher_dir="${GITHUB_WORKSPACE}/portalsurfer-publisher"
+          test "$(git -C "${publisher_dir}" rev-parse HEAD)" = "${PUBLISHER_COMMIT}"
+          ! git -C "${publisher_dir}" symbolic-ref --quiet HEAD
+          test -z "$(git -C "${publisher_dir}" status --porcelain --untracked-files=all)"
+          publisher_script="${publisher_dir}/scripts/publish-plugin-release.mjs"
+          test -f "${publisher_script}" && test ! -L "${publisher_script}"
+          test "$(find "${publisher_dir}/scripts" -maxdepth 1 -type f -name 'publish-plugin-release.mjs' | wc -l)" -eq 1
+          cp "${publisher_script}" "${RUNNER_TEMP}/publish-plugin-release.mjs"
+          test ! -L "${RUNNER_TEMP}/publish-plugin-release.mjs"
+      - name: Upload pinned PortalSurfer publisher script
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gainsnap-publisher-${{ needs.prepare.outputs.source_sha }}
+          path: ${{ runner.temp }}/publish-plugin-release.mjs
+          if-no-files-found: error
+          retention-days: 3
+
+  windows:
+    if: needs.prepare.outputs.should_release == 'true' && inputs.channel == 'nightly'
+    needs: prepare
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      package_version: ${{ needs.prepare.outputs.package_version }}
+      publication_version: ${{ needs.prepare.outputs.publication_version }}
+      channel: ${{ inputs.channel }}
+      build_id: ${{ needs.prepare.outputs.build_id }}
+      released_at: ${{ needs.prepare.outputs.released_at }}
+    permissions:
+      contents: read
+
+  macos_release:
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.should_release == 'true' && (inputs.publish != true || needs.publisher_preflight_gate.result == 'success') && (inputs.channel != 'nightly' || needs.windows.result == 'success') }}
+    needs: [prepare, windows, publisher_preflight_gate]
     runs-on: macos-latest
     environment: production
     permissions:
       contents: write
+      actions: read
+      id-token: write
     steps:
       - name: Checkout exact main source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -168,6 +253,7 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
       - name: Verify shared source identity
         env:
           EXPECTED_GITHUB_SHA: ${{ github.sha }}
@@ -179,10 +265,12 @@ jobs:
           test "$(git symbolic-ref --quiet --short HEAD)" = main
           test "${source_sha}" = "${EXPECTED_GITHUB_SHA}"
           test "${source_sha}" = "${EXPECTED_SOURCE_SHA}"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
+
       - name: Checkout pinned VST3 SDK
         run: |
           set -euo pipefail
@@ -192,6 +280,88 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/vst3sdk" rev-parse HEAD)" = "${VST3_SDK_REVISION}"
           test -d "$RUNNER_TEMP/vst3sdk/pluginterfaces"
           echo "VST3_SDK_DIR=$RUNNER_TEMP/vst3sdk" >> "$GITHUB_ENV"
+
+      - name: Download Windows nightly artifact
+        if: inputs.channel == 'nightly'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: gainsnap-windows-${{ needs.prepare.outputs.build_id }}
+          path: ${{ runner.temp }}/gainsnap-windows
+
+      - name: Validate Windows sidecar and shared identity
+        if: inputs.channel == 'nightly'
+        env:
+          WINDOWS_RELEASE_DIR: ${{ runner.temp }}/gainsnap-windows
+          EXPECTED_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          EXPECTED_PUBLICATION_VERSION: ${{ needs.prepare.outputs.publication_version }}
+          EXPECTED_BUILD_ID: ${{ needs.prepare.outputs.build_id }}
+          EXPECTED_RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
+          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/windows_release_helper.py validate \
+            --root "${WINDOWS_RELEASE_DIR}" \
+            --cargo-lock Cargo.lock \
+            --vst3-sdk-revision "${VST3_SDK_REVISION}"
+          python3 - "${WINDOWS_RELEASE_DIR}" "${EXPECTED_PACKAGE_VERSION}" "${EXPECTED_PUBLICATION_VERSION}" "${EXPECTED_BUILD_ID}" "${EXPECTED_RELEASED_AT}" "${EXPECTED_SOURCE_SHA}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          package_version, publication_version, build_id, released_at, source_sha = sys.argv[2:]
+          manifest = json.loads((root / "windows-artifact-manifest.json").read_text(encoding="utf-8"))
+          expected_archive = f"gainsnap-v{publication_version}-windows-x86_64-unsigned.vst3.zip"
+          expected_build_id = f"gainsnap-v{publication_version}-{source_sha[:12]}"
+          source = manifest.get("source")
+          if (
+              manifest.get("schema_version") != 1
+              or manifest.get("product") != "gainsnap"
+              or manifest.get("format") != "vst3"
+              or manifest.get("platform") != "windows"
+              or manifest.get("architecture") != "x86_64"
+              or manifest.get("package_version") != package_version
+              or manifest.get("publication_version") != publication_version
+              or manifest.get("channel") != "nightly"
+              or manifest.get("build_id") != expected_build_id
+              or manifest.get("build_id") != build_id
+              or manifest.get("released_at") != released_at
+              or not isinstance(source, dict)
+              or source.get("repository") != "PORTALSURFER/gainsnap"
+              or source.get("git_sha") != source_sha
+              or source.get("dirty") is not False
+              or manifest.get("signing_status") != "unsigned"
+              or manifest.get("signing_certificate") is not None
+              or not isinstance(manifest.get("archive"), dict)
+              or manifest["archive"].get("name") != expected_archive
+          ):
+              raise SystemExit("Windows artifact manifest does not match the shared nightly identity")
+          expected_entries = {"windows-artifact-manifest.json", expected_archive}
+          entries = list(root.iterdir())
+          if {entry.name for entry in entries} != expected_entries or any(entry.is_symlink() or not entry.is_file() for entry in entries):
+              raise SystemExit("Windows release directory must contain only the archive and its sidecar")
+          PY
+
+      - name: Download pinned PortalSurfer publisher script
+        if: inputs.publish == true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: gainsnap-publisher-${{ needs.prepare.outputs.source_sha }}
+          path: ${{ runner.temp }}/gainsnap-publisher
+      - name: Verify publisher script artifact
+        id: publisher
+        if: inputs.publish == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          publisher_dir="${RUNNER_TEMP}/gainsnap-publisher"
+          test "$(find "${publisher_dir}" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 1
+          test "$(find "${publisher_dir}" -mindepth 1 -maxdepth 1 -type l | wc -l)" -eq 0
+          publisher_script="${publisher_dir}/publish-plugin-release.mjs"
+          test -f "${publisher_script}" && test ! -L "${publisher_script}"
+          echo "path=${publisher_script}" >> "$GITHUB_OUTPUT"
+
       - name: Produce and optionally publish GainSnap release
         env:
           PORTALSURFER_RELEASE_TOKEN: ${{ inputs.publish && secrets.PORTALSURFER_RELEASE_TOKEN || '' }}
@@ -201,99 +371,56 @@ jobs:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          WINDOWS_RELEASE_DIR: ${{ runner.temp }}/gainsnap-windows
+          PUBLISHER_SCRIPT: ${{ steps.publisher.outputs.path }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          RELEASE_PUBLICATION_VERSION: ${{ needs.prepare.outputs.publication_version }}
+          RELEASE_BUILD_ID: ${{ needs.prepare.outputs.build_id }}
+          RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
+          RELEASE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        shell: bash
         run: |
           set -euo pipefail
           release_args=(
-            --channel "${{ inputs.channel }}"
-            --version "${{ needs.prepare.outputs.package_version }}"
-            --publication-version "${{ needs.prepare.outputs.publication_version }}"
-            --build-id "${{ needs.prepare.outputs.build_id }}"
-            --released-at "${{ needs.prepare.outputs.released_at }}"
-            --source-sha "${{ needs.prepare.outputs.source_sha }}"
+            --channel "${RELEASE_CHANNEL}"
+            --version "${RELEASE_PACKAGE_VERSION}"
+            --publication-version "${RELEASE_PUBLICATION_VERSION}"
+            --build-id "${RELEASE_BUILD_ID}"
+            --released-at "${RELEASED_AT}"
+            --source-ref main
+            --source-sha "${RELEASE_SOURCE_SHA}"
           )
-          if [[ "${{ inputs.publish }}" == true ]]; then
-            bash scripts/release.sh --publish "${release_args[@]}"
-          else
-            bash scripts/release.sh --package-only "${release_args[@]}"
+          if [[ "${RELEASE_CHANNEL}" == nightly ]]; then
+            release_args+=(--windows-release-dir "${WINDOWS_RELEASE_DIR}")
           fi
-      - name: Upload immutable package-only artifact
+          if [[ "${{ inputs.publish }}" == true ]]; then
+            release_args+=(--publish --publisher-script "${PUBLISHER_SCRIPT:?pinned publisher path is missing}")
+          else
+            release_args+=(--package-only)
+          fi
+          bash scripts/release.sh "${release_args[@]}"
+
+      - name: Upload immutable bundle for inspection
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: gainsnap-release-${{ needs.prepare.outputs.build_id }}
+          name: gainsnap-release-${{ inputs.channel }}-${{ needs.prepare.outputs.source_sha }}
           path: dist/releases/*
           if-no-files-found: error
           retention-days: 3
+
       - name: Reconcile metadata-only GitHub Release
-        if: ${{ inputs.publish && inputs.channel != 'nightly' }}
+        if: inputs.publish == true && inputs.channel != 'nightly'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.publication_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ needs.prepare.outputs.publication_version }}"
-          TAG="v${VERSION}"
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            EXISTING_TARGET="$(gh release view "$TAG" --repo "${{ github.repository }}" --json targetCommitish --jq '.targetCommitish')"
-            [[ "${EXISTING_TARGET}" == "${{ needs.prepare.outputs.source_sha }}" ]] || { echo "existing GitHub Release tag resolves to a different source SHA" >&2; exit 1; }
-            if [[ "${{ inputs.channel }}" == rc ]]; then
-              gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
-            else
-              gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease=false --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
-            fi
-          elif [[ "${{ inputs.channel }}" == rc ]]; then
-            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ needs.prepare.outputs.source_sha }}" --prerelease --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+          tag="v${RELEASE_VERSION}"
+          if gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "${tag}" --repo "${{ github.repository }}" --title "${{ inputs.channel }} ${tag}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
           else
-            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ needs.prepare.outputs.source_sha }}" --title "${{ inputs.channel }} ${TAG}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
+            gh release create "${tag}" --repo "${{ github.repository }}" --target "${SOURCE_SHA}" --title "${{ inputs.channel }} ${tag}" --notes "PortalSurfer manifest release; binaries are served by PortalSurfer."
           fi
-
-  windows_artifacts:
-    # Windows output is intentionally an Actions artifact only. It is unsigned
-    # and never enters the macOS signing, notarization, or PortalSurfer publish path.
-    if: ${{ needs.prepare.outputs.should_release == 'true' && inputs.channel == 'nightly' }}
-    needs: prepare
-    runs-on: windows-latest
-    permissions:
-      contents: read
-    env:
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-    steps:
-      - name: Checkout exact main source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify shared source identity
-        env:
-          EXPECTED_GITHUB_SHA: ${{ github.sha }}
-          EXPECTED_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $actualSha = (& git rev-parse HEAD).Trim()
-          if ($actualSha -cne $env:EXPECTED_GITHUB_SHA -or $actualSha -cne $env:EXPECTED_SOURCE_SHA) {
-              throw "checked-out source $actualSha does not match the dispatched/shared source SHA"
-          }
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      - name: Checkout pinned VST3 SDK
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $sdk = Join-Path $env:RUNNER_TEMP "vst3sdk"
-          git clone --quiet --no-tags $env:VST3_SDK_REPOSITORY $sdk
-          git -C $sdk fetch --quiet --depth 1 origin $env:VST3_SDK_REVISION
-          git -C $sdk checkout --quiet --detach $env:VST3_SDK_REVISION
-          if ((git -C $sdk rev-parse HEAD).Trim() -cne $env:VST3_SDK_REVISION) {
-              throw "checked-out VST3 SDK does not match the pinned revision"
-          }
-          "VST3_SDK_DIR=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build and audit unsigned Windows CLAP and VST3 artifacts
-        shell: pwsh
-        run: .\scripts\release-windows.ps1 -Channel "${{ inputs.channel }}" -PackageVersion "${{ needs.prepare.outputs.package_version }}" -PublicationVersion "${{ needs.prepare.outputs.publication_version }}" -BuildId "${{ needs.prepare.outputs.build_id }}" -ReleasedAt "${{ needs.prepare.outputs.released_at }}" -SourceSha "${{ needs.prepare.outputs.source_sha }}" -Formats "clap,vst3"
-      - name: Upload unsigned Windows artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: gainsnap-windows-${{ needs.prepare.outputs.build_id }}
-          path: dist/releases/windows/**
-          if-no-files-found: error
-          retention-days: 3

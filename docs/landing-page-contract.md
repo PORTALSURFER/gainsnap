@@ -18,8 +18,10 @@ The bootstrap flow keeps product release metadata and rendered page content sepa
 - Release API: /plugins/api/v1/products/gainsnap/releases
 - Page: /plugins/gainsnap/
 - Formats: clap, vst3
-- Public catalog platform: macOS arm64
-- Actions artifact platform: Windows x86_64, unsigned, archive names include `windows-unsigned`; Windows artifacts are not sent to PortalSurfer
+- Public catalog: signed macOS arm64 CLAP/VST3 stable, RC, and nightly releases
+- Public nightly additionally includes one unsigned Windows x86_64 VST3 artifact in a schema-3 manifest
+- Stable and RC remain macOS-only schema-2 manifests
+- Exact Windows archive: `gainsnap-v<publication-version>-windows-x86_64-unsigned.vst3.zip`
 
 ## Safety
 

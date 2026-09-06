@@ -190,6 +190,8 @@ jobs:
           set -euo pipefail
           source_binary="dist/gainsnap-v${PACKAGE_VERSION}.vst3/Contents/x86_64-win/gainsnap-v${PACKAGE_VERSION}.vst3"
           rm -rf -- "dist/gainsnap-v${PACKAGE_VERSION}.vst3"
+          # Tests may cache build.rs, so recreate the linker output directory.
+          mkdir -p "$(dirname "${source_binary}")"
           cargo build --locked --release --target x86_64-pc-windows-msvc --features vst3
           test -f "${source_binary}"
 

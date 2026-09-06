@@ -29,7 +29,7 @@ use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
 
 use crate::clap_plugin::HostParamRequester;
-use crate::params::{PARAM_MATCH, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
+use crate::params::{PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
 use crate::status::{GuiStatus, MatchState};
 
 /// Preferred logical editor width for the compact toggle control surface.
@@ -56,7 +56,7 @@ const TARGET_CONTROL_SPACING: f32 = 6.0;
 const ACTION_CONTROL_WIDTH: f32 = 96.0;
 const ACTION_CONTROL_HEIGHT: f32 =
     TARGET_METER_HEIGHT + TARGET_CONTROL_SPACING + TARGET_ENTRY_HEIGHT;
-const MATCHING_CONTROL_HEIGHT: f32 = 62.0;
+const MATCHING_CONTROL_HEIGHT: f32 = 92.0;
 const MATCH_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
 const MATCH_BUTTON_HEIGHT: f32 = 32.0;
 const NORMALIZE_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH;
@@ -93,9 +93,9 @@ const SURFACE_PADDING_X: f32 = 16.0;
 const SURFACE_COLUMN_GAP: f32 = 12.0;
 const MATCH_PULSE_SECONDS: f32 = 1.2;
 
-const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target peak, dBFS";
+const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target level, dBFS";
 const NORMALIZE_AUTOMATION_LABEL: &str = "Normalize";
-const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Normalize to 0 dBFS and start Match";
+const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Peak normalize to 0 dBFS and start Match";
 
 /// Format-neutral host automation sink used by the VST3 editor.
 pub(crate) trait HostParamEditSink: Send + Sync {
@@ -460,11 +460,13 @@ impl WidgetSemantics for TargetMeter {
     }
 
     fn automation_label(&self) -> Option<String> {
-        Some(String::from("Target Peak"))
+        Some(String::from("Target Level"))
     }
 
     fn automation_description(&self) -> Option<String> {
-        Some(String::from("Target peak in dBFS"))
+        Some(String::from(
+            "Target level in dBFS for the selected Peak or RMS mode",
+        ))
     }
 
     fn automation_value_text(&self) -> Option<String> {
@@ -895,6 +897,7 @@ fn step_target_db(target_db: f32, direction: TargetStepDirection, shift_held: bo
 struct DisplaySnapshot {
     target_db: u32,
     match_requested: bool,
+    rms_mode: bool,
     output_peak_db: u32,
     locked_gain_db: u32,
     progress: u32,
@@ -910,7 +913,9 @@ impl DisplaySnapshot {
                 .clamp(TARGET_RANGE.min, TARGET_RANGE.max)
                 .to_bits(),
             match_requested: params.get_param(PARAM_MATCH).unwrap_or(0.0) >= 0.5,
-            output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
+            rms_mode: params.rms_mode(),
+            output_peak_db: sanitize_meter_level_db(status.output_level_db(params.rms_mode()))
+                .to_bits(),
             locked_gain_db: status.locked_gain_db().to_bits(),
             progress: status.progress().to_bits(),
             state: status.state(),
@@ -973,7 +978,7 @@ impl EditorState {
             .get_param(PARAM_TARGET_DB)
             .unwrap_or(TARGET_RANGE.default)
             .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
-        let output_peak_db = sanitize_meter_level_db(status.output_peak_db());
+        let output_peak_db = sanitize_meter_level_db(status.output_level_db(params.rms_mode()));
         Self {
             params,
             automation_queue,
@@ -992,7 +997,8 @@ impl EditorState {
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
+        let target_db =
+            sanitize_meter_level_db(self.status.output_level_db(self.params.rms_mode()));
         let elapsed = now.saturating_duration_since(self.meter_last_update);
         self.meter_last_update = now;
         let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
@@ -1017,7 +1023,8 @@ impl EditorState {
     }
 
     fn meter_needs_realtime_redraw(&self) -> bool {
-        let target_db = sanitize_meter_level_db(self.status.output_peak_db());
+        let target_db =
+            sanitize_meter_level_db(self.status.output_level_db(self.params.rms_mode()));
         (self.output_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
     }
 
@@ -1098,6 +1105,7 @@ impl EditorState {
     }
 
     fn normalize(&mut self) {
+        self.toggle_value(PARAM_RMS_MODE, false);
         self.set_target_db(TARGET_MAX_DB);
         self.target_text = format_target_text(self.target_text_param);
         self.toggle_value(PARAM_MATCH, true);
@@ -1294,6 +1302,29 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
         custom_widget_mapped(
+            ToggleWidget::new(
+                0,
+                if state.params.rms_mode() {
+                    "RMS"
+                } else {
+                    "PEAK"
+                },
+                WidgetSizing::fixed(Vector2::new(ACTION_CONTROL_WIDTH, 24.0)),
+            )
+            .with_checked(state.params.rms_mode()),
+            |message: ToggleMessage| {
+                let ToggleMessage::ValueChanged { checked, .. } = message;
+                EditorMessage::Toggle {
+                    id: PARAM_RMS_MODE,
+                    checked,
+                }
+            },
+        )
+        .subtle()
+        .key("level-mode")
+        .size(ACTION_CONTROL_WIDTH, 24.0)
+        .tooltip("Switch between Peak and RMS matching and metering"),
+        custom_widget_mapped(
             MatchButtonWidget::new(state.params.match_requested(), state.pulse_alpha),
             |message: ToggleMessage| {
                 let ToggleMessage::ValueChanged { checked, .. } = message;
@@ -1313,7 +1344,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .subtle()
         .key("normalize")
         .size(NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT)
-        .tooltip("Set target to 0 dBFS and start Match"),
+        .tooltip("Switch to Peak, set target to 0 dBFS and start Match"),
     ])
     .width(ACTION_CONTROL_WIDTH)
     .height(MATCHING_CONTROL_HEIGHT)
@@ -1443,6 +1474,73 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn clicking_mode_then_normalize_updates_the_visible_mode_and_parameters() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let mut editor = GainSnapEditor::new(
+            params.clone(),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        fn click_label(editor: &mut GainSnapEditor, label: &str) {
+            let point = editor
+                .paint_plan()
+                .first_text_run(label)
+                .unwrap()
+                .rect
+                .center();
+            editor.dispatch_event(Event::primary_press(point));
+            editor.dispatch_event(Event::primary_release(point));
+        }
+        click_label(&mut editor, "PEAK");
+        assert!(params.rms_mode());
+        assert!(editor.paint_plan().contains_text("RMS"));
+        click_label(&mut editor, "Normalize");
+        assert!(!params.rms_mode());
+        assert!(params.match_requested());
+        assert_eq!(params.target_db(), 0.0);
+        assert!(editor.paint_plan().contains_text("PEAK"));
+    }
+
+    #[test]
+    fn mode_toggle_automates_and_selects_rms_meter_without_resizing() {
+        let mut state = editor_state();
+        let sink = Arc::new(RecordingEditSink::default());
+        state.edit_sink = Some(sink.clone());
+        state.status.update(-6.0, -6.0, 0.0, 0.0, MatchState::Ready);
+        state.status.update_rms(-12.0);
+        reduce_message(
+            &mut state,
+            EditorMessage::Toggle {
+                id: PARAM_RMS_MODE,
+                checked: true,
+            },
+        );
+        assert!(state.params.rms_mode());
+        assert_eq!(
+            sink.events(),
+            vec![
+                EditEvent::Begin(PARAM_RMS_MODE),
+                EditEvent::Value(PARAM_RMS_MODE, 1.0),
+                EditEvent::End(PARAM_RMS_MODE)
+            ]
+        );
+        let snapshot = DisplaySnapshot::capture(&state.params, &state.status);
+        assert_eq!(f32::from_bits(snapshot.output_peak_db), -12.0);
+        let plan = project_surface(&mut state)
+            .frame_at_size(
+                Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
+                &ThemeTokens::default(),
+            )
+            .paint_plan;
+        assert!(plan.contains_text("RMS"));
+        reduce_message(&mut state, EditorMessage::Normalize);
+        assert!(!state.params.rms_mode());
+        assert!(state.params.match_requested());
     }
 
     #[test]
@@ -2324,6 +2422,7 @@ mod tests {
             (TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT),
             (MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT),
             (NORMALIZE_BUTTON_WIDTH, NORMALIZE_BUTTON_HEIGHT),
+            (ACTION_CONTROL_WIDTH, 24.0),
         ];
         let controls = frame
             .layout
@@ -2754,12 +2853,14 @@ mod screenshot_tests {
             .unwrap_or_else(|| PathBuf::from("target/ui-screenshots"))
             .join("gainsnap");
         std::fs::create_dir_all(&root).expect("screenshot directory should be writable");
-        for (name, matching, alpha) in [
-            ("initial-ui", false, 255),
-            ("matching-bright", true, 255),
-            ("matching-dim", true, 166),
+        for (name, matching, alpha, rms) in [
+            ("initial-ui", false, 255, false),
+            ("matching-bright", true, 255, false),
+            ("matching-dim", true, 166, false),
+            ("rms-mode", true, 255, true),
         ] {
             state.params.set_param(PARAM_MATCH, f32::from(matching));
+            state.params.set_param(PARAM_RMS_MODE, f32::from(rms));
             state.pulse_alpha = alpha;
             if matching {
                 state

@@ -12,6 +12,21 @@ target. Disabling Match holds that correction. The Normalize button sets the
 target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
+The PEAK/RMS button selects the matching measurement and output meter. Peak
+remains the default, including when loading older projects. RMS uses a 300 ms
+exponential mean-square average of each channel and links gain to the louder
+channel, preserving stereo balance. The scale uses a full-scale square wave as
+0 dBFS RMS; a full-scale sine reads about -3.01 dBFS RMS. The mode is saved with
+the project and can be automated in CLAP and VST3.
+
+RMS matching observes the first 300 ms using conservative peak correction,
+then follows the changing average. Silence holds the gain; after two seconds
+of silence, returning audio gets a fresh protected startup. RMS permits peaks
+above its average target, with the existing 0 dBFS sample-peak guard still active.
+Targets that would require clipping or more than ±24 dB correction cannot be
+reached; the meter always shows the actual protected output. Normalize switches
+to PEAK, sets 0 dBFS, and starts Match.
+
 Engaging Match while audio is playing first fades the audible gain down over
 10 ms, then fades the matched output up over 300 ms. This avoids the waveform
 jump caused by an immediate mute. Starting from silence waits for usable audio
@@ -21,7 +36,7 @@ higher-precision smoothing at high sample rates.
 
 A stereo-linked sample-peak guard reacts immediately to bursts and recovers over
 100 ms. The short outgoing transition retains its previous ceiling while fading
-down; the incoming matched path is capped at the selected target. Held output
+down; the incoming Peak-mode path is capped at the selected target. Held output
 is capped at 0 dBFS afterward. Turning Match off early lets the transition finish.
 Protection adds no latency, and the meter includes its attenuation.
 
@@ -29,7 +44,7 @@ When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the meter accepts direct dBFS entry as well.
 
-The vertical meter shows a smoothed output peak in realtime as one thick
+The vertical meter shows the selected smoothed output level in realtime as one thick
 orange column, with a small dB scale at its left edge. A small triangle beside
 the meter marks the target and acts as the target control; the compact
 interface keeps the level overview visible without separate numeric readouts.

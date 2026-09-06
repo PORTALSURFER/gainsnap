@@ -14,7 +14,7 @@ use crate::status::GuiStatus;
 /// Maximum parameter points retained by one VST3 process block.
 pub(super) const PARAM_EVENT_CAPACITY: usize = 256;
 /// Number of stable parameters used by overflow convergence storage.
-pub(super) const PARAMETER_COUNT: usize = 3;
+pub(super) const PARAMETER_COUNT: usize = crate::params::PARAM_DEFS.len();
 
 /// One normalized-to-plain parameter point scheduled by a VST3 host.
 #[derive(Clone, Copy, Debug)]

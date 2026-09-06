@@ -357,6 +357,25 @@ mod tests {
             "native keyboard must not duplicate VST3 input"
         );
 
+        for (label, rms) in [("PEAK", true), ("Normalize", false)] {
+            let center = RadiantEditor::paint_plan(&mut preview)
+                .first_text_run(label)
+                .expect("mode and normalize controls")
+                .rect
+                .center();
+            let point = LPARAM(
+                (center.x.mul_add(scale, 0.0) as isize & 0xffff)
+                    | ((center.y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
+            );
+            unsafe {
+                SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
+                SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
+            }
+            assert_eq!(shared.params.rms_mode(), rms);
+        }
+        assert!(shared.params.match_requested());
+        assert_eq!(shared.params.target_db(), 0.0);
+
         rect.right = (312.0 * scale) as i32;
         rect.bottom = (318.0 * scale) as i32;
         assert_eq!(unsafe { view.checkSizeConstraint(&mut rect) }, kResultOk);

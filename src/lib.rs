@@ -12,7 +12,10 @@ mod params;
 mod state;
 mod status;
 
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 pub mod gui;
 
 #[cfg(feature = "vst3")]

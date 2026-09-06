@@ -1,6 +1,6 @@
 //! VST3 edit controller and hosted editor creation.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
@@ -12,8 +12,8 @@ use toybox::vst3::prelude::*;
 
 use crate::params::text_to_value;
 
-#[cfg(target_os = "macos")]
-use super::gui_adapter::GainSnapVst3GuiAdapter;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::gui_adapter;
 use super::param_bridge;
 use super::shared_state::{ComponentHandlerOwner, GainSnapVst3Shared};
 use super::{read_vst3_state, write_vst3_state, CONTROLLER_CID};
@@ -177,13 +177,13 @@ impl IEditControllerTrait for GainSnapVst3Controller {
     }
 
     unsafe fn createView(&self, name: FIDString) -> *mut IPlugView {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = name;
             ptr::null_mut()
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             if name.is_null() {
                 return ptr::null_mut();
@@ -195,7 +195,7 @@ impl IEditControllerTrait for GainSnapVst3Controller {
             }
 
             let shared = self.shared();
-            let adapter = GainSnapVst3GuiAdapter::new(shared, Arc::clone(&self.component_handler));
+            let adapter = gui_adapter::new_gui(shared, Arc::clone(&self.component_handler));
             let view =
                 HostedVst3View::new(adapter, crate::gui::WINDOW_WIDTH, crate::gui::WINDOW_HEIGHT)
                     .with_size_bounds(
@@ -227,6 +227,150 @@ const _: TUID = CONTROLLER_CID;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn custom_editor_exposes_the_native_platform_and_compact_size() {
+        let controller = GainSnapVst3Controller::new();
+        assert!(unsafe { controller.createView(ptr::null()) }.is_null());
+        let raw = unsafe { controller.createView(ViewType::kEditor) };
+        let view =
+            unsafe { ComPtr::from_raw(raw) }.expect("GainSnap must expose its custom editor");
+        #[cfg(target_os = "macos")]
+        let platform = kPlatformTypeNSView;
+        #[cfg(target_os = "windows")]
+        let platform = kPlatformTypeHWND;
+        assert_eq!(unsafe { view.isPlatformTypeSupported(platform) }, kResultOk);
+        let mut rect = ViewRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
+        assert_eq!((rect.right, rect.bottom), (208, 212));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_editor_attaches_handles_input_resizes_and_reopens() {
+        use toybox::radiant_gui::RadiantEditor;
+        use windows::core::w;
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::Graphics::Gdi::UpdateWindow;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindow, IsWindow, PeekMessageW,
+            SendMessageW, TranslateMessage, GW_CHILD, MSG, PM_REMOVE, WM_CHAR, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WS_OVERLAPPEDWINDOW,
+        };
+
+        struct Parent(HWND);
+        impl Drop for Parent {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+        let parent = Parent(
+            unsafe {
+                CreateWindowExW(
+                    Default::default(),
+                    w!("STATIC"),
+                    w!("GainSnap host test"),
+                    WS_OVERLAPPEDWINDOW,
+                    0,
+                    0,
+                    640,
+                    480,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .expect("create a real Windows host parent"),
+        );
+        let controller = GainSnapVst3Controller::new();
+        let shared = controller.shared();
+        let raw = unsafe { controller.createView(ViewType::kEditor) };
+        let view = unsafe { ComPtr::from_raw(raw) }.expect("native editor view");
+        assert_eq!(
+            unsafe { view.attached(parent.0 .0, kPlatformTypeHWND) },
+            kResultOk
+        );
+        let child = unsafe { GetWindow(parent.0, GW_CHILD) }.expect("embedded native child");
+        assert!(unsafe { IsWindow(Some(child)) }.as_bool());
+        let _ = unsafe { UpdateWindow(child) };
+        let mut message = MSG::default();
+        for _ in 0..256 {
+            if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                break;
+            }
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+
+        let mut preview = crate::gui::GainSnapEditor::new(
+            Arc::clone(&shared.params),
+            Arc::new(toybox::clap::automation::AutomationQueue::default()),
+            Arc::clone(&shared.status),
+            None,
+            None,
+        );
+        let center = RadiantEditor::paint_plan(&mut preview)
+            .first_text_run("MATCH")
+            .expect("visible Match label")
+            .rect
+            .center();
+        let mut rect = ViewRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
+        let scale = (rect.right - rect.left) as f32 / crate::gui::WINDOW_WIDTH as f32;
+        let point = LPARAM(
+            (center.x.mul_add(scale, 0.0) as isize & 0xffff)
+                | ((center.y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
+        );
+        unsafe {
+            SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
+            SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
+        }
+        assert!(
+            shared.params.match_requested(),
+            "native click must activate Match"
+        );
+        assert_eq!(unsafe { view.onKeyDown(' ' as char16, 7, 0) }, kResultOk);
+        let _ = unsafe { view.onKeyUp(' ' as char16, 7, 0) };
+        assert!(
+            !shared.params.match_requested(),
+            "host keyboard callback must toggle once"
+        );
+        unsafe {
+            SendMessageW(child, WM_CHAR, Some(WPARAM(32)), Some(LPARAM(0)));
+        }
+        assert!(
+            !shared.params.match_requested(),
+            "native keyboard must not duplicate VST3 input"
+        );
+
+        rect.right = (312.0 * scale) as i32;
+        rect.bottom = (318.0 * scale) as i32;
+        assert_eq!(unsafe { view.checkSizeConstraint(&mut rect) }, kResultOk);
+        assert_eq!(unsafe { view.onSize(&mut rect) }, kResultOk);
+        assert_eq!(unsafe { view.removed() }, kResultOk);
+        assert!(!unsafe { IsWindow(Some(child)) }.as_bool());
+        assert_eq!(
+            unsafe { view.attached(parent.0 .0, kPlatformTypeHWND) },
+            kResultOk
+        );
+        let reopened = unsafe { GetWindow(parent.0, GW_CHILD) }.expect("reopened child");
+        assert!(unsafe { IsWindow(Some(reopened)) }.as_bool());
+        assert_eq!(unsafe { view.removed() }, kResultOk);
+    }
 
     #[test]
     fn component_handler_owner_survives_shared_state_adoption() {

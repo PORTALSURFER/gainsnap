@@ -1,4 +1,4 @@
-//! Radiant editor for the macOS CLAP and VST3 GainSnap views.
+//! Radiant editor for the macOS and Windows CLAP and VST3 GainSnap views.
 //!
 //! The editor owns only retained UI state. Audio-thread telemetry is published
 //! through atomics, and parameter gestures use the CLAP queue or the VST3
@@ -219,7 +219,17 @@ impl Widget for MatchButtonWidget {
         if self.toggle.state.checked {
             theme.accent_mint = theme.accent_mint.with_alpha(self.pulse_alpha);
         }
+        let first_primitive = primitives.len();
         self.toggle.append_paint(primitives, bounds, layout, &theme);
+        if self.toggle.state.checked {
+            // Keep the label readable when the active fill fades toward the
+            // dark background; the shared opaque-accent text color is dark.
+            for primitive in &mut primitives[first_primitive..] {
+                if let PaintPrimitive::Text(run) = primitive {
+                    run.color = theme.text_primary;
+                }
+            }
+        }
     }
 }
 
@@ -476,7 +486,7 @@ impl Widget for TargetMeter {
             return None;
         }
         match input {
-            WidgetInput::PointerMove { position } => {
+            WidgetInput::PointerMove { position, .. } => {
                 self.common.state.hovered = bounds.contains(position);
                 self.common
                     .state
@@ -520,11 +530,11 @@ impl Widget for TargetMeter {
                 }
                 None
             }
-            WidgetInput::PointerModifiersChanged { modifiers } => {
+            WidgetInput::PointerModifiersChanged { modifiers, .. } => {
                 self.shift_held = modifiers.shift;
                 None
             }
-            WidgetInput::KeyPress(key) if self.common.state.focused => match key {
+            WidgetInput::KeyPress { key, .. } if self.common.state.focused => match key {
                 WidgetKey::ArrowUp | WidgetKey::ArrowRight => self
                     .step_value(TargetStepDirection::Up)
                     .map(WidgetOutput::typed),
@@ -1101,7 +1111,7 @@ type EditorRuntime = DeclarativeSurfaceRuntime<
     fn(&mut EditorState, EditorMessage),
 >;
 
-/// Retained editor hosted by Toybox's macOS GUI bridge.
+/// Retained editor hosted by Toybox's native GUI bridge.
 pub(crate) struct GainSnapEditor {
     runtime: EditorRuntime,
     theme: ThemeTokens,
@@ -1142,7 +1152,7 @@ impl GainSnapEditor {
 
     fn dispatch_event(&mut self, event: Event) {
         let shift_held = match event {
-            Event::PointerModifiersChanged { modifiers } => Some(modifiers.shift),
+            Event::PointerModifiersChanged { modifiers, .. } => Some(modifiers.shift),
             _ => None,
         };
         let _ = self.runtime.dispatch_event(event);
@@ -1286,7 +1296,7 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         custom_widget_mapped(
             MatchButtonWidget::new(state.params.match_requested(), state.pulse_alpha),
             |message: ToggleMessage| {
-                let ToggleMessage::ValueChanged { checked } = message;
+                let ToggleMessage::ValueChanged { checked, .. } = message;
                 EditorMessage::Toggle {
                     id: PARAM_MATCH,
                     checked,
@@ -1451,9 +1461,10 @@ mod tests {
         let output = slider
             .handle_input(
                 bounds,
-                WidgetInput::PointerMove {
-                    position: Point::new(TARGET_CONTROL_WIDTH * 0.5, TARGET_METER_HEIGHT),
-                },
+                WidgetInput::pointer_move(Point::new(
+                    TARGET_CONTROL_WIDTH * 0.5,
+                    TARGET_METER_HEIGHT,
+                )),
             )
             .expect("dragging the meter rail should emit a value");
         assert_eq!(
@@ -1463,7 +1474,7 @@ mod tests {
 
         slider.set_value(1.0);
         let output = slider
-            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowDown))
+            .handle_input(bounds, WidgetInput::key_press(WidgetKey::ArrowDown))
             .expect("focused meter keyboard input should emit a value");
         assert_eq!(
             output.typed_copied::<SliderMessage>(),
@@ -1480,7 +1491,7 @@ mod tests {
         slider.common.state.focused = true;
 
         slider
-            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .handle_input(bounds, WidgetInput::key_press(WidgetKey::ArrowUp))
             .expect("normal arrow input should emit a value");
         let normal_target = TARGET_RANGE.denormalize(slider.value);
         assert!((normal_target - (-11.0)).abs() < 0.0001);
@@ -1488,6 +1499,7 @@ mod tests {
         slider.handle_input(
             bounds,
             WidgetInput::PointerModifiersChanged {
+                timestamp: None,
                 modifiers: PointerModifiers {
                     shift: true,
                     ..PointerModifiers::default()
@@ -1495,7 +1507,7 @@ mod tests {
             },
         );
         slider
-            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .handle_input(bounds, WidgetInput::key_press(WidgetKey::ArrowUp))
             .expect("shift arrow input should emit a value");
         let fine_target = TARGET_RANGE.denormalize(slider.value);
         assert!((fine_target - (-10.9)).abs() < 0.0001);
@@ -1503,11 +1515,12 @@ mod tests {
         slider.handle_input(
             bounds,
             WidgetInput::PointerModifiersChanged {
+                timestamp: None,
                 modifiers: PointerModifiers::default(),
             },
         );
         slider
-            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowDown))
+            .handle_input(bounds, WidgetInput::key_press(WidgetKey::ArrowDown))
             .expect("normal arrow input after Shift should emit a value");
         let normal_down_target = TARGET_RANGE.denormalize(slider.value);
         assert!((normal_down_target - (-11.9)).abs() < 0.0001);
@@ -1522,7 +1535,7 @@ mod tests {
         current.synchronize_from_previous(&previous);
         current.common.state.focused = true;
         current
-            .handle_input(bounds, WidgetInput::KeyPress(WidgetKey::ArrowUp))
+            .handle_input(bounds, WidgetInput::key_press(WidgetKey::ArrowUp))
             .expect("rebuilt meter should accept keyboard input");
 
         let target_db = TARGET_RANGE.denormalize(current.value);
@@ -1597,6 +1610,7 @@ mod tests {
                 .handle_input(
                     bounds,
                     WidgetInput::PointerRelease {
+                        timestamp: None,
                         position: center,
                         button: PointerButton::Primary,
                         modifiers: PointerModifiers::default(),
@@ -1680,9 +1694,7 @@ mod tests {
         let output = meter
             .handle_input(
                 bounds,
-                WidgetInput::PointerMove {
-                    position: Point::new(-20.0, bounds.min.y),
-                },
+                WidgetInput::pointer_move(Point::new(-20.0, bounds.min.y)),
             )
             .expect("captured movement should continue to update the target outside bounds");
         assert_eq!(
@@ -1692,6 +1704,7 @@ mod tests {
         meter.handle_input(
             bounds,
             WidgetInput::PointerRelease {
+                timestamp: None,
                 position: Point::new(-20.0, bounds.min.y),
                 button: PointerButton::Primary,
                 modifiers: PointerModifiers::default(),
@@ -2731,7 +2744,7 @@ mod screenshot_tests {
             None,
             None,
         );
-        let mut capture = radiant::gui_runtime::OffscreenVelloCapture::new(
+        let mut capture = toybox::radiant_gui::bundled_offscreen_capture(
             Vector2::new(WINDOW_WIDTH as f32, WINDOW_HEIGHT as f32),
             DpiScale::ONE,
         )

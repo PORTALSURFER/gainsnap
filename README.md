@@ -12,14 +12,18 @@ target. Disabling Match holds that correction. The Normalize button sets the
 target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
-Engaging Match fades the output up from silence over 300 ms, starting when usable
-audio arrives. Gain boosts use a slower 100 ms response, while gain reductions
-use 10 ms. A stereo-linked sample-peak guard reacts immediately to bursts and
-recovers over 100 ms: it caps output at the selected target while matching and
-during the fade, and at 0 dBFS afterward. Turning Match off early lets the fade
-finish. Protection adds no latency and the meter includes its attenuation.
-The fade is applied after peak protection, so even a strong startup burst stays
-under the rising fade ceiling.
+Engaging Match while audio is playing first fades the audible gain down over
+10 ms, then fades the matched output up over 300 ms. This avoids the waveform
+jump caused by an immediate mute. Starting from silence waits for usable audio
+before fading up. Rapid restarts and target changes begin from the gain actually
+being heard. Gain boosts use a 100 ms response and reductions use 10 ms, with
+higher-precision smoothing at high sample rates.
+
+A stereo-linked sample-peak guard reacts immediately to bursts and recovers over
+100 ms. The short outgoing transition retains its previous ceiling while fading
+down; the incoming matched path is capped at the selected target. Held output
+is capped at 0 dBFS afterward. Turning Match off early lets the transition finish.
+Protection adds no latency, and the meter includes its attenuation.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
@@ -31,7 +35,8 @@ the meter marks the target and acts as the target control; the compact
 interface keeps the level overview visible without separate numeric readouts.
 The default editor is 208 × 212 logical pixels, with aligned action buttons and
 tighter spacing. Match and the status dot pulse together while Match is enabled,
-including when playback is silent.
+including when playback is silent. Native macOS and Windows editors share this
+surface, including host keyboard input, focus, and DPI-aware resizing.
 After the gain settles, the measured peak reaches the target when the required
 correction is within the supported ±24 dB range. Quieter passages read below the
 target; while matching, the peak guard contains newly encountered louder peaks

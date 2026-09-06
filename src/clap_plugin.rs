@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use toybox::clack_common::plugin::features as plugin_features;
 use toybox::clack_extensions::audio_ports::*;
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 use toybox::clack_extensions::gui::{PluginGui, PluginGuiImpl};
 use toybox::clack_extensions::params::*;
 use toybox::clack_extensions::state::{PluginState, PluginStateImpl};
@@ -100,7 +103,10 @@ impl Plugin for GainSnapPlugin {
             .register::<PluginAudioPorts>()
             .register::<PluginParams>()
             .register::<PluginState>();
-        #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+        #[cfg(all(
+            any(target_os = "macos", target_os = "windows"),
+            feature = "radiant-gui"
+        ))]
         builder.register::<PluginGui>();
     }
 }
@@ -128,7 +134,10 @@ impl DefaultPluginFactory for GainSnapPlugin {
         host: HostMainThreadHandle<'a>,
         shared: &'a Self::Shared<'a>,
     ) -> Result<Self::MainThread<'a>, PluginError> {
-        #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+        #[cfg(all(
+            any(target_os = "macos", target_os = "windows"),
+            feature = "radiant-gui"
+        ))]
         {
             let param_requester = host_param_requester(host.shared());
             Ok(GainSnapMainThread {
@@ -142,7 +151,10 @@ impl DefaultPluginFactory for GainSnapPlugin {
                 automation_drain: AutomationDrainBuffer::default(),
             })
         }
-        #[cfg(not(all(target_os = "macos", feature = "radiant-gui")))]
+        #[cfg(not(all(
+            any(target_os = "macos", target_os = "windows"),
+            feature = "radiant-gui"
+        )))]
         {
             let _ = host;
             Ok(GainSnapMainThread {
@@ -168,7 +180,10 @@ impl PluginShared<'_> for GainSnapShared {}
 /// Main-thread state for CLAP host interaction and the optional editor.
 pub struct GainSnapMainThread<'a> {
     shared: &'a GainSnapShared,
-    #[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+    #[cfg(all(
+        any(target_os = "macos", target_os = "windows"),
+        feature = "radiant-gui"
+    ))]
     gui: toybox::radiant_gui::RadiantHostedGui,
     automation_drain: AutomationDrainBuffer,
 }
@@ -249,7 +264,10 @@ impl PluginStateImpl for GainSnapMainThread<'_> {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 impl PluginGuiImpl for GainSnapMainThread<'_> {
     toybox::radiant_clap_gui_callbacks!(
         gui = gui,
@@ -476,14 +494,20 @@ impl PluginAudioProcessorParams for GainSnapAudioProcessor<'_> {
 }
 
 /// Helper for requesting host-side parameter flushes from the CLAP editor.
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 #[derive(Clone, Copy)]
 pub(crate) struct HostParamRequester {
     host: HostSharedHandle<'static>,
     params: HostParams,
 }
 
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 impl HostParamRequester {
     /// Ask the host to flush queued editor gestures.
     pub(crate) fn request_flush(self) {
@@ -491,7 +515,10 @@ impl HostParamRequester {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "radiant-gui"))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "radiant-gui"
+))]
 fn host_param_requester(host: HostSharedHandle<'_>) -> Option<HostParamRequester> {
     let params = host.get_extension::<HostParams>()?;
     let host =

@@ -11,8 +11,8 @@ use radiant::gui::automation::AutomationRole;
 use radiant::gui::types::{Point, Rect, Rgba8, Vector2};
 use radiant::layout::{CrossAlign, MainAlign};
 use radiant::prelude::{
-    column, custom_widget, custom_widget_mapped, row, text_input, IntoView, Widget, WidgetCommon,
-    WidgetInput, WidgetKey, WidgetOutput, WidgetSizing,
+    column, custom_widget, custom_widget_mapped, row, IntoView, Widget, WidgetCommon, WidgetInput,
+    WidgetKey, WidgetOutput, WidgetSizing,
 };
 use radiant::runtime::{DeclarativeSurfaceRuntime, Event, SurfacePaintPlan, UiSurface};
 use radiant::runtime::{
@@ -186,6 +186,10 @@ impl MatchButtonWidget {
 }
 
 impl Widget for MatchButtonWidget {
+    fn focused_key_disposition(&self, key: WidgetKey) -> radiant::widgets::FocusedKeyDisposition {
+        self.toggle.focused_key_disposition(key)
+    }
+
     fn common(&self) -> &WidgetCommon {
         self.toggle.common()
     }
@@ -345,6 +349,10 @@ impl WidgetSemantics for NormalizeButtonWidget {
 }
 
 impl Widget for NormalizeButtonWidget {
+    fn focused_key_disposition(&self, key: WidgetKey) -> radiant::widgets::FocusedKeyDisposition {
+        self.button.focused_key_disposition(key)
+    }
+
     fn common(&self) -> &WidgetCommon {
         self.button.common()
     }
@@ -475,6 +483,22 @@ impl WidgetSemantics for TargetMeter {
 }
 
 impl Widget for TargetMeter {
+    fn focused_key_disposition(&self, key: WidgetKey) -> radiant::widgets::FocusedKeyDisposition {
+        if matches!(
+            key,
+            WidgetKey::ArrowUp
+                | WidgetKey::ArrowDown
+                | WidgetKey::ArrowLeft
+                | WidgetKey::ArrowRight
+                | WidgetKey::Home
+                | WidgetKey::End
+        ) {
+            radiant::widgets::FocusedKeyDisposition::Consumed
+        } else {
+            radiant::widgets::FocusedKeyDisposition::Unhandled
+        }
+    }
+
     fn common(&self) -> &WidgetCommon {
         &self.common
     }
@@ -1199,7 +1223,16 @@ impl GainSnapEditor {
             || self.runtime.bridge().state().params.match_requested()
     }
 
+    #[cfg(test)]
     fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
+        self.dispatch_key_press_with_modifiers(key, radiant::widgets::KeyboardModifiers::default())
+    }
+
+    fn dispatch_key_press_with_modifiers(
+        &mut self,
+        key: WidgetKey,
+        modifiers: radiant::widgets::KeyboardModifiers,
+    ) -> bool {
         let direction = match key {
             WidgetKey::ArrowUp => Some(TargetStepDirection::Up),
             WidgetKey::ArrowDown => Some(TargetStepDirection::Down),
@@ -1212,13 +1245,17 @@ impl GainSnapEditor {
                 return true;
             }
         }
-        self.runtime.dispatch_event(Event::key_press(key)).is_some()
+        self.runtime.dispatch_keyboard_event(Event::KeyPress {
+            key,
+            modifiers,
+            repeat: false,
+            timestamp: None,
+        })
     }
 
     fn dispatch_character(&mut self, character: char) -> bool {
         self.runtime
-            .dispatch_event(Event::character(character))
-            .is_some()
+            .dispatch_keyboard_event(Event::character(character))
     }
 }
 
@@ -1239,8 +1276,20 @@ impl toybox::radiant_gui::RadiantEditor for GainSnapEditor {
         Self::needs_realtime_redraw(self)
     }
 
-    fn dispatch_key_press(&mut self, key: WidgetKey) -> bool {
-        Self::dispatch_key_press(self, key)
+    fn dispatch_key_press(
+        &mut self,
+        key: WidgetKey,
+        modifiers: radiant::widgets::KeyboardModifiers,
+    ) -> bool {
+        self.runtime
+            .dispatch_event(Event::pointer_modifiers_changed(
+                radiant::widgets::PointerModifiers {
+                    command: modifiers.command || (!cfg!(target_os = "macos") && modifiers.control),
+                    shift: modifiers.shift,
+                    alt: modifiers.alt,
+                },
+            ));
+        Self::dispatch_key_press_with_modifiers(self, key, modifiers)
     }
 
     fn dispatch_character(&mut self, character: char) -> bool {
@@ -1292,14 +1341,22 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
     .width(TARGET_CONTROL_WIDTH)
     .height(TARGET_METER_HEIGHT);
     // Keep the framework text input as the leaf so its native editing lifecycle
-    // remains intact; the compact placeholder supplies the semantic name.
-    let target_entry = text_input(state.target_text.clone())
-        .placeholder(TARGET_ENTRY_AUTOMATION_LABEL)
-        .message_event(EditorMessage::TargetTextChanged)
-        .key("target-entry")
-        .subtle()
-        .width(TARGET_CONTROL_WIDTH)
-        .height(TARGET_ENTRY_HEIGHT);
+    // remains intact. Declare compact leaf sizing so text and caret insets
+    // fit the 28px entry; the placeholder supplies the semantic name.
+    let mut target_input = radiant::widgets::TextInputWidget::new(
+        0,
+        state.target_text.clone(),
+        WidgetSizing::fixed(Vector2::new(TARGET_CONTROL_WIDTH, TARGET_ENTRY_HEIGHT)),
+    );
+    target_input.props.placeholder = Some(TARGET_ENTRY_AUTOMATION_LABEL.into());
+    let target_entry = radiant::application::widget(radiant::application::MappedWidget::new(
+        target_input,
+        radiant::runtime::WidgetMessageMapper::text_input(EditorMessage::TargetTextChanged),
+    ))
+    .key("target-entry")
+    .subtle()
+    .width(TARGET_CONTROL_WIDTH)
+    .height(TARGET_ENTRY_HEIGHT);
     let matching = column([
         custom_widget_mapped(
             ToggleWidget::new(
@@ -2798,6 +2855,28 @@ mod tests {
         assert_eq!(state.pulse_alpha, 255);
         assert!(state.pulse_started.is_none());
         assert!(!state.advance_pulse_at(start + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn unused_space_and_characters_return_to_host_after_clicking_match() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        assert!(!editor.dispatch_character(' '));
+        let plan = editor.paint_plan();
+        let id = plan.first_text_run("MATCH").unwrap().widget_id;
+        assert!(editor.runtime.focus_widget(id));
+        assert!(!editor.dispatch_character(' '));
+        assert!(!editor.dispatch_character('x'));
+        assert!(!editor.dispatch_key_press(WidgetKey::Delete));
+        assert!(!params.match_requested());
+        assert!(editor.dispatch_key_press(WidgetKey::Enter));
+        assert!(params.match_requested());
     }
 
     #[test]

@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "toybox"
 version = "0.1.0"
-source = "git+https://github.com/PORTALSURFER/toybox.git?rev=a69df15593a5cb9320993dde8d9908bfe857a9f6#a69df15593a5cb9320993dde8d9908bfe857a9f6"
+source = "git+https://github.com/PORTALSURFER/toybox.git?rev=e09f34cded8e06988d4586908a9ea887b049b4f1#e09f34cded8e06988d4586908a9ea887b049b4f1"
 dependencies = [
  "clack-common",
  "clack-extensions",
@@ -3000,12 +3000,12 @@ dependencies = [
 [[package]]
 name = "toybox-process-log"
 version = "0.1.0"
-source = "git+https://github.com/PORTALSURFER/toybox.git?rev=a69df15593a5cb9320993dde8d9908bfe857a9f6#a69df15593a5cb9320993dde8d9908bfe857a9f6"
+source = "git+https://github.com/PORTALSURFER/toybox.git?rev=e09f34cded8e06988d4586908a9ea887b049b4f1#e09f34cded8e06988d4586908a9ea887b049b4f1"
 
 [[package]]
 name = "toybox-vst3-ffi"
 version = "0.1.0"
-source = "git+https://github.com/PORTALSURFER/toybox.git?rev=a69df15593a5cb9320993dde8d9908bfe857a9f6#a69df15593a5cb9320993dde8d9908bfe857a9f6"
+source = "git+https://github.com/PORTALSURFER/toybox.git?rev=e09f34cded8e06988d4586908a9ea887b049b4f1#e09f34cded8e06988d4586908a9ea887b049b4f1"
 dependencies = [
  "vst3",
 ]

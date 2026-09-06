@@ -32,10 +32,26 @@ GitHub Actions secrets handled by the credentials stage (each value is prompted 
   when: Optional; set only when automatic Developer ID Application identity selection is ambiguous or selects the wrong certificate.
   why: Explicit Developer ID Application identity override; the release script discovers it when this is absent.
 
-GitHub Actions variables: none are referenced by the generated workflows; the credentials stage creates no variables.
+The bootstrap credentials stage creates no GitHub Actions variables. The release
+workflow integration variable is documented separately below.
+
+Release workflow integration entries (configure directly in GitHub; they are
+not handled by the bootstrap credentials stage):
+- PORTALSURFER_PUBLISHER_APP_ID (repository variable)
+  destination: GitHub > PORTALSURFER/gainsnap > Settings > Secrets and variables > Actions > Variables
+  when: Required for a publishing workflow run so the protected publisher-integration job can create a scoped checkout token.
+  why: GitHub App ID for read-only checkout of the pinned private PortalSurfer publisher repository.
+- PORTALSURFER_PUBLISHER_PRIVATE_KEY (publisher-integration environment secret)
+  destination: GitHub > PORTALSURFER/gainsnap > Settings > Secrets and variables > Actions > Environments > publisher-integration > Environment secrets
+  when: Required only for the protected publisher-integration preflight job.
+  why: Private key used to create a token scoped to PORTALSURFER/portalsurfer.org contents:read; it is never available to Windows or the production macOS job.
+- PORTALSURFER_RELEASE_TOKEN (production environment secret)
+  destination: GitHub > PORTALSURFER/gainsnap > Settings > Secrets and variables > Actions > Environments > production > Environment secrets
+  when: Required only when publishing a production release.
+  why: Existing per-product release upload credential used by the pinned publisher; it is not passed to the Windows job.
 
 The pinned PORTALSURFER/radiant dependency is public; generated workflows do not require a repository token.
-The per-product PortalSurfer release credential is provisioned by the separate publisher stage after the landing page has been deployed; it is not entered in this ordinary credentials stage.
+The per-product PortalSurfer release credential is provisioned by the separate publisher stage after the landing page has been deployed; it is not entered in this ordinary credentials stage. The publisher-integration App ID/key are workflow configuration, and the bootstrapper does not provision them.
 
 Not managed by the credentials stage; configure these directly before the relevant operation:
 - AUDIODEV_PRODUCTS_FILE [PortalSurfer server variable]

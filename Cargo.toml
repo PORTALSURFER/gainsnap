@@ -15,12 +15,15 @@ vst3 = ["toybox/radiant-vst3", "radiant-gui"]
 screenshot-test = ["dep:image", "radiant-gui"]
 
 [dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "1c40aeee6062b3bcebc2799fa2ab65cf36d160a2", default-features = false }
-radiant = { git = "https://github.com/PORTALSURFER/radiant.git", rev = "b21a4caa094294b3eb2b2b87f6c6bc08ced8b137", default-features = false, optional = true }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "a69df15593a5cb9320993dde8d9908bfe857a9f6", default-features = false }
+radiant = { git = "https://github.com/PORTALSURFER/radiant.git", rev = "c1343993c973bdece3e8cd469415b0d08c7f6cf1", default-features = false, optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [build-dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "1c40aeee6062b3bcebc2799fa2ab65cf36d160a2", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "a69df15593a5cb9320993dde8d9908bfe857a9f6", default-features = false }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 [lints.rust]
 warnings = "deny"

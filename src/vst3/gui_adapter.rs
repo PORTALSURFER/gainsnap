@@ -5,7 +5,6 @@ use std::sync::Arc;
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
 use toybox::vst3::prelude::Steinberg::Vst::IComponentHandler;
-use toybox::vst3::prelude::Steinberg::{char16, int16};
 use toybox::vst3::prelude::*;
 
 use crate::gui::HostParamEditSink;
@@ -73,66 +72,29 @@ impl HostParamEditSink for Vst3HostParamEditSink {
     }
 }
 
-/// VST3 host adapter delegating native-window and input ownership to Toybox.
-pub(super) struct GainSnapVst3GuiAdapter {
-    gui: toybox::radiant_gui::RadiantHostedGui,
-}
-
-impl GainSnapVst3GuiAdapter {
-    /// Construct an editor bound to the controller's adopted shared state.
-    pub(super) fn new(
-        shared: Arc<GainSnapVst3Shared>,
-        component_handler: Arc<ComponentHandlerOwner>,
-    ) -> Self {
-        let sink = Arc::new(Vst3HostParamEditSink::new(component_handler));
-        let editor = crate::gui::GainSnapEditor::new(
-            Arc::clone(&shared.params),
-            Arc::new(AutomationQueue::default()),
-            Arc::clone(&shared.status),
-            None,
-            Some(sink),
-        );
-        let gui = toybox::radiant_gui::RadiantHostedGui::new(
-            "GainSnapRadiantVst3EditorView",
-            editor,
-            crate::gui::WINDOW_WIDTH,
-            crate::gui::WINDOW_HEIGHT,
-        )
-        .with_size_contract(
-            (crate::gui::MIN_WINDOW_WIDTH, crate::gui::MIN_WINDOW_HEIGHT),
-            (crate::gui::WINDOW_WIDTH, crate::gui::WINDOW_HEIGHT),
-            (crate::gui::MAX_WINDOW_WIDTH, crate::gui::MAX_WINDOW_HEIGHT),
-        );
-        Self { gui }
-    }
-}
-
-impl Vst3HostedGui for GainSnapVst3GuiAdapter {
-    fn set_parent_raw(&mut self, parent: toybox::raw_window_handle::RawWindowHandle) {
-        self.gui.set_parent(parent);
-    }
-
-    fn open(&mut self) -> bool {
-        self.gui.open()
-    }
-
-    fn close(&mut self) {
-        self.gui.close();
-    }
-
-    fn last_size(&self) -> Option<(u32, u32)> {
-        self.gui.last_size()
-    }
-
-    fn request_resize(&self, width: u32, height: u32) {
-        self.gui.request_resize(width, height);
-    }
-
-    fn on_key_down(&self, key: char16, key_code: int16, modifiers: int16) -> bool {
-        self.gui.on_key_down(key, key_code, modifiers)
-    }
-
-    fn on_key_up(&self, key: char16, key_code: int16, modifiers: int16) -> bool {
-        self.gui.on_key_up(key, key_code, modifiers)
-    }
+/// Construct the shared native host directly so keyboard delivery, focus,
+/// and Windows DPI conversion retain Toybox's complete VST3 contract.
+pub(super) fn new_gui(
+    shared: Arc<GainSnapVst3Shared>,
+    component_handler: Arc<ComponentHandlerOwner>,
+) -> toybox::radiant_gui::RadiantHostedGui {
+    let sink = Arc::new(Vst3HostParamEditSink::new(component_handler));
+    let editor = crate::gui::GainSnapEditor::new(
+        Arc::clone(&shared.params),
+        Arc::new(AutomationQueue::default()),
+        Arc::clone(&shared.status),
+        None,
+        Some(sink),
+    );
+    toybox::radiant_gui::RadiantHostedGui::new(
+        "GainSnapRadiantVst3EditorView",
+        editor,
+        crate::gui::WINDOW_WIDTH,
+        crate::gui::WINDOW_HEIGHT,
+    )
+    .with_size_contract(
+        (crate::gui::MIN_WINDOW_WIDTH, crate::gui::MIN_WINDOW_HEIGHT),
+        (crate::gui::WINDOW_WIDTH, crate::gui::WINDOW_HEIGHT),
+        (crate::gui::MAX_WINDOW_WIDTH, crate::gui::MAX_WINDOW_HEIGHT),
+    )
 }

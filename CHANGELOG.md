@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fade playing audio down briefly before starting Match, avoiding the immediate mute that caused clicks; preserve the audible gain through rapid restarts and target edits.
+- Improve gain-smoothing precision at high sample rates.
+- Enable the native Windows editor with shared keyboard, focus, and DPI support; validate its host lifecycle in Windows CI.
+
 - Apply peak matching live and display the protected output level.
 - Fade in after output protection to contain strong startup bursts.
 - Compact the editor and pulse Match and its status indicator together.

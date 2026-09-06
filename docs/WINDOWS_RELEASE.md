@@ -14,6 +14,14 @@ which records the source SHA, package/publication versions, build ID,
 `released_at`, pinned dependency revisions, runner/toolchain provenance, and
 the explicit unsigned status.
 
+## Native editor validation
+
+Windows uses the same retained GainSnap editor as macOS, hosted by Toybox's
+Win32 Radiant bridge. The workflow runs the DSP/editor test suite, including a
+real HWND attach, Match click and VST3 keyboard input, duplicate native-key
+suppression, resize, removal, and reopen before packaging the VST3 bundle.
+The screenshot harness uses the same bundled fonts as both live editors.
+
 ## Workflow boundary
 
 `.github/workflows/windows-release.yml` is a reusable Windows Server 2022

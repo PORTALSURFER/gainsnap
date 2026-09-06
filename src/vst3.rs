@@ -12,7 +12,7 @@ use crate::state::{
 
 mod controller;
 mod factory;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod gui_adapter;
 mod param_bridge;
 mod processor;

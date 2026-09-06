@@ -10,14 +10,16 @@ in realtime as one thick orange column, with a small dB scale at its left edge.
 A small triangle beside the meter marks the target and acts as the target
 control.
 
-Match starts with a 300 ms fade from silence once signal arrives. Gain increases
+Match fades playing audio down over 10 ms before a 300 ms fade up. Silent
+starts wait for usable signal. Restarts preserve the currently audible gain. Gain increases
 use a slower 100 ms response than the 10 ms reductions. A stereo-linked sample
-peak guard caps matching output at the target, and otherwise caps output at
-0 dBFS, with immediate attack and 100 ms recovery. The fade continues if Match
+peak guard retains the previous ceiling during the outgoing fade, then caps
+matching output at the target and held output at 0 dBFS, with immediate attack and 100 ms recovery. The fade continues if Match
 is disabled early. Output metering includes this protection.
 The startup fade follows the peak guard, bounding strong bursts throughout the
 fade. The 208 × 212 editor groups its controls tightly; the Match button and
-status dot share a pulse while Match is enabled.
+status dot share a pulse while Match is enabled. Both macOS and Windows use
+Toybox's native Radiant host, including keyboard, focus, and DPI conversion.
 
 ## Constraints
 

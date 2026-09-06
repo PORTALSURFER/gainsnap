@@ -9,6 +9,8 @@ pub const GAIN_SMOOTHING_SECONDS: f32 = 0.01;
 pub const GAIN_INCREASE_SECONDS: f32 = 0.1;
 /// Fade from silence when Match is engaged, starting with the first signal.
 pub const MATCH_FADE_SECONDS: f32 = 0.3;
+/// Fade the audible signal down before restarting Match, avoiding a hard mute.
+pub const MATCH_FADE_OUT_SECONDS: f32 = 0.01;
 /// Recovery time for the stereo-linked, instantaneous-attack sample peak guard.
 pub const PEAK_GUARD_RELEASE_SECONDS: f32 = 0.1;
 /// Peak below this threshold is treated as no usable signal.
@@ -35,20 +37,27 @@ pub struct EngineReport {
 
 /// Per-instance, audio-thread-owned matcher and gain smoother.
 pub struct GainSnapEngine {
-    smoothing_coefficient: f32,
-    gain_increase_coefficient: f32,
+    smoothing_coefficient: f64,
+    gain_increase_coefficient: f64,
     peak_guard_release_coefficient: f64,
     peak_guard_gain: f64,
     match_fade_step: f32,
     match_fade_position: f32,
+    fade_out_step: f32,
+    fade_out_position: f32,
+    fade_out_gain: f32,
+    fade_out_ceiling: f32,
+    last_output_gain: f32,
+    last_output_ceiling: f32,
+    last_output_peak: f32,
     measurement_peak: f32,
     block_input_peak: f32,
     block_output_peak: f32,
     measurement_target_db: f32,
     measurement_target_peak: f32,
     locked_gain_db: f32,
-    current_gain: f32,
-    target_gain: f32,
+    current_gain: f64,
+    target_gain: f64,
     previous_match_request: bool,
     state: MatchState,
 }
@@ -61,27 +70,36 @@ impl GainSnapEngine {
         } else {
             48_000.0
         };
-        let smoothing_coefficient = 1.0 - (-1.0 / (sample_rate * GAIN_SMOOTHING_SECONDS)).exp();
-        let gain_increase_coefficient = 1.0 - (-1.0 / (sample_rate * GAIN_INCREASE_SECONDS)).exp();
+        let smoothing_coefficient =
+            -(-1.0 / (sample_rate as f64 * GAIN_SMOOTHING_SECONDS as f64)).exp_m1();
+        let gain_increase_coefficient =
+            -(-1.0 / (sample_rate as f64 * GAIN_INCREASE_SECONDS as f64)).exp_m1();
         let peak_guard_release_coefficient =
             -(-1.0 / (sample_rate as f64 * PEAK_GUARD_RELEASE_SECONDS as f64)).exp_m1();
         let locked_gain_db = sanitize_gain_db(stored_gain_db);
         let gain = db_to_linear(locked_gain_db);
         Self {
-            smoothing_coefficient: smoothing_coefficient.clamp(0.0001, 1.0),
+            smoothing_coefficient,
             gain_increase_coefficient,
             peak_guard_release_coefficient,
             peak_guard_gain: 1.0,
             match_fade_step: 1.0 / (sample_rate * MATCH_FADE_SECONDS),
             match_fade_position: 1.0,
+            fade_out_step: 1.0 / (sample_rate * MATCH_FADE_OUT_SECONDS),
+            fade_out_position: 1.0,
+            fade_out_gain: 0.0,
+            fade_out_ceiling: 1.0,
+            last_output_gain: gain,
+            last_output_ceiling: 1.0,
+            last_output_peak: 0.0,
             measurement_peak: 0.0,
             block_input_peak: 0.0,
             block_output_peak: 0.0,
             measurement_target_db: -12.0,
             measurement_target_peak: 10.0_f32.powf(-12.0 / 20.0),
             locked_gain_db,
-            current_gain: gain,
-            target_gain: gain,
+            current_gain: gain as f64,
+            target_gain: gain as f64,
             previous_match_request: false,
             state: MatchState::Ready,
         }
@@ -103,10 +121,16 @@ impl GainSnapEngine {
         self.measurement_target_db = params.target_db();
         self.measurement_target_peak = 10.0_f32.powf(self.measurement_target_db / 20.0);
         self.locked_gain_db = sanitize_gain_db(params.locked_gain_db());
-        self.current_gain = db_to_linear(self.locked_gain_db);
+        self.current_gain = db_to_linear(self.locked_gain_db) as f64;
         self.target_gain = self.current_gain;
         self.peak_guard_gain = 1.0;
         self.match_fade_position = 1.0;
+        self.fade_out_position = 1.0;
+        self.fade_out_gain = 0.0;
+        self.fade_out_ceiling = 1.0;
+        self.last_output_gain = self.current_gain as f32;
+        self.last_output_ceiling = 1.0;
+        self.last_output_peak = 0.0;
         self.previous_match_request = false;
         self.state = MatchState::Ready;
     }
@@ -128,7 +152,7 @@ impl GainSnapEngine {
             self.measurement_target_peak = 10.0_f32.powf(self.measurement_target_db / 20.0);
             self.state = MatchState::Measuring;
             self.previous_match_request = true;
-            self.match_fade_position = 0.0;
+            self.start_match_transition();
         } else if self.state == MatchState::Measuring {
             let target_db = params.target_db();
             if (target_db - self.measurement_target_db).abs() > f32::EPSILON {
@@ -138,6 +162,7 @@ impl GainSnapEngine {
                 self.measurement_peak = 0.0;
                 self.measurement_target_db = target_db;
                 self.measurement_target_peak = 10.0_f32.powf(target_db / 20.0);
+                self.start_match_transition();
             }
         }
 
@@ -147,9 +172,21 @@ impl GainSnapEngine {
             && (stored_gain_db - self.locked_gain_db).abs() > 0.0001
         {
             self.locked_gain_db = stored_gain_db;
-            self.target_gain = db_to_linear(stored_gain_db);
-            self.current_gain = self.target_gain;
+            self.target_gain = db_to_linear(stored_gain_db) as f64;
         }
+    }
+
+    fn start_match_transition(&mut self) {
+        // Retain the gain actually heard, including any previous fade/guard.
+        // Restarting mid-fade must not jump back to a stored or unity gain.
+        self.fade_out_gain = self.last_output_gain;
+        self.fade_out_ceiling = self.last_output_ceiling;
+        self.fade_out_position = if self.last_output_peak > SILENCE_PEAK_LINEAR {
+            0.0
+        } else {
+            1.0
+        };
+        self.match_fade_position = 0.0;
     }
 
     /// Process one stereo frame without allocating, locking, or blocking.
@@ -186,10 +223,13 @@ impl GainSnapEngine {
         // preroll. Finishing Match early keeps the fade instead of bypassing it.
         let position = self.match_fade_position;
         let fade = position * position * (3.0 - 2.0 * position);
-        if self.state != MatchState::Measuring || self.measurement_peak > SILENCE_PEAK_LINEAR {
+        let fading_out = self.fade_out_position < 1.0;
+        if !fading_out
+            && (self.state != MatchState::Measuring || self.measurement_peak > SILENCE_PEAK_LINEAR)
+        {
             self.match_fade_position = (position + self.match_fade_step).min(1.0);
         }
-        let desired_gain = self.current_gain;
+        let desired_gain = self.current_gain as f32;
         let ceiling = if self.state == MatchState::Measuring || position < 1.0 {
             // Target peaks extend below the correction-gain range, so do not
             // use db_to_linear(), which clamps to the gain parameter bounds.
@@ -220,8 +260,33 @@ impl GainSnapEngine {
         // uses the same gain for both channels, preserving their balance.
         // Fade the protected samples, not the requested gain. Otherwise a
         // strong input can hit the fixed ceiling while the fade is still low.
-        let output_left = (input_left * applied_gain).clamp(-ceiling, ceiling) * fade;
-        let output_right = (input_right * applied_gain).clamp(-ceiling, ceiling) * fade;
+        let (output_left, output_right) = if fading_out {
+            // The outgoing path keeps its previous ceiling during this short
+            // fade. Switching to the new target ceiling immediately would
+            // recreate the discontinuity this transition is meant to remove.
+            // Its gain can only decrease, even if a louder input arrives.
+            let old_ceiling = self.fade_out_ceiling;
+            if input_peak > 0.0 {
+                self.fade_out_gain = self.fade_out_gain.min(old_ceiling / input_peak);
+            }
+            let p = self.fade_out_position;
+            let outgoing = 1.0 - p * p * (3.0 - 2.0 * p);
+            self.fade_out_position = (p + self.fade_out_step).min(1.0);
+            self.last_output_gain = self.fade_out_gain * outgoing;
+            self.last_output_ceiling = old_ceiling * outgoing;
+            (
+                (input_left * self.fade_out_gain).clamp(-old_ceiling, old_ceiling) * outgoing,
+                (input_right * self.fade_out_gain).clamp(-old_ceiling, old_ceiling) * outgoing,
+            )
+        } else {
+            self.last_output_gain = applied_gain * fade;
+            self.last_output_ceiling = ceiling * fade;
+            (
+                (input_left * applied_gain).clamp(-ceiling, ceiling) * fade,
+                (input_right * applied_gain).clamp(-ceiling, ceiling) * fade,
+            )
+        };
+        self.last_output_peak = output_left.abs().max(output_right.abs());
         self.block_output_peak = self
             .block_output_peak
             .max(output_left.abs().max(output_right.abs()));
@@ -259,7 +324,7 @@ impl GainSnapEngine {
         let measured_db = linear_to_db(self.measurement_peak);
         let gain_db = (self.measurement_target_db - measured_db).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
         self.locked_gain_db = sanitize_gain_db(gain_db);
-        self.target_gain = db_to_linear(self.locked_gain_db);
+        self.target_gain = db_to_linear(self.locked_gain_db) as f64;
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, self.locked_gain_db);
     }
 }
@@ -596,13 +661,17 @@ mod tests {
         assert!(after_off < 0.01);
 
         run_frames(&mut engine, &params, 1.0, 48_000);
+        let before_restart = engine.process_frame(&params, 1.0, -1.0);
         params.set_param(PARAM_MATCH, 1.0);
         engine.sync_controls(&params);
-        assert_eq!(engine.process_frame(&params, 1.0, -1.0), (0.0, -0.0));
+        let after_restart = engine.process_frame(&params, 1.0, -1.0);
+        assert!((after_restart.0 - before_restart.0).abs() < 1.0e-6);
+        run_frames(&mut engine, &params, 1.0, 480);
+        assert!(engine.process_frame(&params, 1.0, -1.0).0 < 0.0001);
     }
 
     #[test]
-    fn target_edits_enforce_the_new_ceiling_at_the_event_boundary() {
+    fn target_edits_fade_out_before_enforcing_the_new_ceiling() {
         let params = GainSnapParams::new();
         params.set_param(PARAM_TARGET_DB, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
@@ -612,8 +681,83 @@ mod tests {
         params.set_param(PARAM_TARGET_DB, -36.0);
         engine.sync_controls(&params);
         let (left, right) = engine.process_frame(&params, 1.0, 0.5);
-        assert!(left <= 10.0_f32.powf(-36.0 / 20.0));
+        assert!((left - 1.0).abs() < 0.0001);
         assert_eq!(right, left * 0.5);
+        run_frames(&mut engine, &params, 1.0, 480);
+        for _ in 0..48_000 {
+            let (left, right) = engine.process_frame(&params, 1.0, 0.5);
+            assert!(left <= 10.0_f32.powf(-36.0 / 20.0));
+            assert_eq!(right, left * 0.5);
+        }
+    }
+
+    #[test]
+    fn engaging_match_on_playing_audio_has_no_hard_mute_or_large_step() {
+        for sample_rate in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            for target in [-36.0, -12.0, 0.0] {
+                let params = GainSnapParams::new();
+                params.set_param(PARAM_TARGET_DB, target);
+                let mut engine = GainSnapEngine::new(sample_rate, 0.0);
+                engine.begin_block(&params);
+                run_frames(&mut engine, &params, 0.5, 128);
+                let mut previous = engine.process_frame(&params, 0.5, -0.25).0;
+                params.set_param(PARAM_MATCH, 1.0);
+                engine.sync_controls(&params);
+                let first = engine.process_frame(&params, 0.5, -0.25).0;
+                assert!((first - previous).abs() < 1.0e-6);
+                let mut quietest = first;
+                for _ in 0..sample_rate as usize {
+                    let (left, right) = engine.process_frame(&params, 0.5, -0.25);
+                    assert!(
+                        (left - previous).abs() < 0.002,
+                        "Match introduced a step at {sample_rate} Hz: {previous} -> {left}"
+                    );
+                    assert_eq!(right, -left * 0.5);
+                    quietest = quietest.min(left);
+                    previous = left;
+                }
+                assert!(quietest < 1.0e-6, "transition must pass through silence");
+                assert!((linear_to_db(previous) - target).abs() < 0.002);
+            }
+        }
+    }
+
+    #[test]
+    fn rapid_match_restarts_keep_the_current_audible_gain() {
+        for restart_after in [1, 17, 240, 481, 2_000] {
+            let params = GainSnapParams::new();
+            let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+            engine.begin_block(&params);
+            run_frames(&mut engine, &params, 0.5, 128);
+            params.set_param(PARAM_MATCH, 1.0);
+            engine.sync_controls(&params);
+            run_frames(&mut engine, &params, 0.5, restart_after);
+            let before = engine.process_frame(&params, 0.5, -0.25);
+            params.set_param(PARAM_MATCH, 0.0);
+            engine.sync_controls(&params);
+            params.set_param(PARAM_MATCH, 1.0);
+            engine.sync_controls(&params);
+            let after = engine.process_frame(&params, 0.5, -0.25);
+            assert!((after.0 - before.0).abs() < 1.0e-6);
+            assert_eq!(after.1, -after.0 * 0.5);
+        }
+    }
+
+    #[test]
+    fn engagement_preserves_the_waveform_at_nonzero_sine_phases() {
+        for phase in [0.1_f32, 0.7, 1.5, 2.7, 3.3, 4.6, 5.8] {
+            let params = GainSnapParams::new();
+            let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+            engine.begin_block(&params);
+            let input = phase.sin() * 0.7;
+            engine.process_frame(&params, input, -input);
+            params.set_param(PARAM_MATCH, 1.0);
+            engine.sync_controls(&params);
+            let next = (phase + std::f32::consts::TAU * 1_000.0 / 48_000.0).sin() * 0.7;
+            let output = engine.process_frame(&params, next, -next);
+            assert!((output.0 - next).abs() < 1.0e-6);
+            assert_eq!(output.1, -output.0);
+        }
     }
 
     #[test]

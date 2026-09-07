@@ -97,3 +97,5 @@ site/product.json is the release/catalog contract and site/landing-page.json is 
 ## Credentials
 
 The credentials stage handles only the listed ordinary GitHub Actions entries through hidden stdin prompts or the execute-only Apple .p12/.p8 path options; it never persists or logs values and never handles server-side SSH/deploy credentials. Supplied files are checked as regular files with the expected extension and a bounded size, encoded in memory after the confirmation gate, and sent only through gh standard input. The per-product PortalSurfer release credential belongs to the publisher stage. The pinned PORTALSURFER/radiant dependency is public, so no repository credential is required. See docs/RELEASE_CREDENTIALS.md and docs/RELEASE_PUBLISHER.md for the exact contracts.
+
+Match automatically switches off when the plug-in editor is closed, hidden, or minimized, retaining the last matched gain. Keep the editor visible to compare upstream effects at a matched level. Moving focus to another device keeps Match active; reopening the editor leaves it off.

@@ -1194,6 +1194,23 @@ impl GainSnapEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let button_focused = self.mode_focus_handle.is_focused(window)
+            || self.match_focus_handle.is_focused(window)
+            || self.normalize_focus_handle.is_focused(window);
+        if button_focused {
+            // GPUI's interactive button turns a clean Space or Enter
+            // keydown/keyup pair into its ClickEvent. Consume the keydown at
+            // the editor boundary so VST3 hosts treat the activation as
+            // handled and do not also use Space for transport. Modified
+            // variants remain available to the host and cannot activate the
+            // button.
+            if matches!(event.keystroke.key.as_str(), "space" | "enter")
+                && !event.keystroke.modifiers.modified()
+            {
+                cx.stop_propagation();
+            }
+            return;
+        }
         let input_focused = self.target_input.read(cx).focus_handle().is_focused(window);
         let meter_focused = self.meter_focus_handle.is_focused(window);
         if !(input_focused || meter_focused) {
@@ -1443,6 +1460,10 @@ impl Render for GainSnapEditor {
             .role(gpui::Role::Button)
             .aria_label(NORMALIZE_AUTOMATION_DESCRIPTION)
             .track_focus(&self.normalize_focus_handle)
+            .on_mouse_down(MouseButton::Left, {
+                let focus_handle = self.normalize_focus_handle.clone();
+                move |_, window, cx| window.focus(&focus_handle, cx)
+            })
             .on_click(cx.listener(Self::normalize))
             .child("Normalize");
 
@@ -1524,6 +1545,7 @@ fn button_element(
     focus_handle: &FocusHandle,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
+    let focus_handle_for_mouse = focus_handle.clone();
     let (background, foreground) = if active {
         // Radiant keeps the active label on the primary text color while the
         // coral fill pulses underneath it.
@@ -1556,6 +1578,9 @@ fn button_element(
         .line_height(px(14.0))
         .role(gpui::Role::Button)
         .track_focus(focus_handle)
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.focus(&focus_handle_for_mouse, cx);
+        })
         .on_click(listener)
         .child(label)
 }

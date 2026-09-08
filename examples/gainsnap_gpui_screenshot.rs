@@ -17,9 +17,13 @@ mod macos {
     use std::ptr::NonNull;
     use std::thread;
     use std::time::Duration;
+    use toybox::clack_plugin::utils::ClapId;
 
     const OUTPUT_WIDTH: u32 = WINDOW_WIDTH;
     const OUTPUT_HEIGHT: u32 = WINDOW_HEIGHT;
+    const PARAM_TARGET_DB: ClapId = ClapId::new(1);
+    const PARAM_MATCH: ClapId = ClapId::new(2);
+    const PARAM_RMS_MODE: ClapId = ClapId::new(4);
 
     struct NativeFixture {
         window: id,
@@ -228,6 +232,26 @@ mod macos {
         }
     }
 
+    unsafe fn send_click(window: id, x: f64, top_y: f64) {
+        let window_number: isize = msg_send![window, windowNumber];
+        let location = NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - top_y);
+        for event_type in [1_usize, 2_usize] {
+            let click: id = msg_send![
+                class!(NSEvent),
+                mouseEventWithType: event_type
+                location: location
+                modifierFlags: 0_u64
+                timestamp: 0.0_f64
+                windowNumber: window_number
+                context: std::ptr::null_mut::<Object>()
+                eventNumber: 1_isize
+                clickCount: 1_isize
+                pressure: 1.0_f64
+            ];
+            let _: () = msg_send![window, sendEvent: click];
+        }
+    }
+
     unsafe fn send_key(
         app: id,
         window: id,
@@ -235,6 +259,29 @@ mod macos {
         text: &str,
         key_code: u16,
         modifiers: u64,
+    ) {
+        send_key_with_repeat(app, window, gui, text, key_code, modifiers, false);
+    }
+
+    unsafe fn send_repeated_key(
+        app: id,
+        window: id,
+        gui: &toybox::gpui_gui::GpuiHostedGui,
+        text: &str,
+        key_code: u16,
+        modifiers: u64,
+    ) {
+        send_key_with_repeat(app, window, gui, text, key_code, modifiers, true);
+    }
+
+    unsafe fn send_key_with_repeat(
+        app: id,
+        window: id,
+        gui: &toybox::gpui_gui::GpuiHostedGui,
+        text: &str,
+        key_code: u16,
+        modifiers: u64,
+        repeat: bool,
     ) {
         let bytes = CString::new(text).expect("key text has no nul");
         let characters: id = msg_send![
@@ -256,6 +303,22 @@ mod macos {
             keyCode: key_code
         ];
         let _: () = msg_send![window, sendEvent: down];
+        if repeat {
+            let repeated_down: id = msg_send![
+                class!(NSEvent),
+                keyEventWithType: 10_usize
+                location: NSPoint { x: 48.0, y: 28.0 }
+                modifierFlags: modifiers
+                timestamp: 0.0_f64
+                windowNumber: window_number
+                context: std::ptr::null_mut::<Object>()
+                characters: characters
+                charactersIgnoringModifiers: characters
+                isARepeat: YES
+                keyCode: key_code
+            ];
+            let _: () = msg_send![window, sendEvent: repeated_down];
+        }
         let up: id = msg_send![
             class!(NSEvent),
             keyEventWithType: 11_usize
@@ -289,26 +352,19 @@ mod macos {
         ];
         pump_appkit(app, &gui, 0.1);
 
-        let window_number: isize = msg_send![fixture.window, windowNumber];
-        for event_type in [1_usize, 2_usize] {
-            let click: id = msg_send![
-                class!(NSEvent),
-                mouseEventWithType: event_type
-                location: NSPoint { x: 48.0, y: 28.0 }
-                modifierFlags: 0_u64
-                timestamp: 0.0_f64
-                windowNumber: window_number
-                context: std::ptr::null_mut::<Object>()
-                eventNumber: 1_isize
-                clickCount: 1_isize
-                pressure: 1.0_f64
-            ];
-            let _: () = msg_send![fixture.window, sendEvent: click];
-        }
-        pump_appkit(app, &gui, 0.03);
-
         const COMMAND: u64 = 1_u64 << 20;
         const SHIFT: u64 = 1_u64 << 17;
+
+        // With no focused GPUI control, Space remains available to the host.
+        send_repeated_key(app, fixture.window, &gui, " ", 49, 0);
+        assert!(
+            !params.match_requested(),
+            "unfocused Space must not toggle Match"
+        );
+
+        send_click(fixture.window, 48.0, 184.0);
+        pump_appkit(app, &gui, 0.03);
+
         send_key(app, fixture.window, &gui, "a", 0, COMMAND);
         send_key(app, fixture.window, &gui, "-", 27, 0);
         send_key(app, fixture.window, &gui, "1", 18, 0);
@@ -381,9 +437,85 @@ mod macos {
             Some("-".to_owned()),
             "caret selection should copy the selected grapheme"
         );
+
+        // Exercise native focus plus GPUI's keyboard click path for every
+        // action control. A repeated Space keydown must still produce only
+        // one keyup click, and modified activation keys must pass through.
+        send_click(fixture.window, 144.0, 85.0);
+        pump_appkit(app, &gui, 0.03);
+        assert!(
+            params.match_requested(),
+            "native Match click should activate"
+        );
+        send_repeated_key(app, fixture.window, &gui, " ", 49, 0);
+        assert!(
+            !params.match_requested(),
+            "repeated Space should toggle Match only once"
+        );
+        send_key(app, fixture.window, &gui, " ", 49, SHIFT);
+        assert!(
+            !params.match_requested(),
+            "modified Space must not activate Match"
+        );
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert!(
+            params.match_requested(),
+            "Enter should activate the focused Match button"
+        );
+
+        send_click(fixture.window, 144.0, 51.0);
+        pump_appkit(app, &gui, 0.03);
+        assert!(params.rms_mode(), "native RMS click should activate");
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert!(
+            !params.rms_mode(),
+            "Enter should activate the focused RMS button"
+        );
+
+        send_click(fixture.window, 144.0, 119.0);
+        pump_appkit(app, &gui, 0.03);
+        assert_eq!(
+            params.target_db(),
+            0.0,
+            "native Normalize click should set 0 dB"
+        );
+        assert!(
+            !params.rms_mode(),
+            "Normalize should leave peak mode selected"
+        );
+        assert!(params.match_requested(), "Normalize should enable Match");
+
+        // Change the shared state behind the still-focused Normalize control,
+        // then require Enter to perform the action again. This distinguishes
+        // keyboard activation from the preceding mouse click.
+        params.set_param(PARAM_TARGET_DB, -15.0);
+        params.set_param(PARAM_RMS_MODE, 1.0);
+        params.set_param(PARAM_MATCH, 0.0);
+        pump_appkit(app, &gui, 0.08);
+        send_key(app, fixture.window, &gui, "\r", 36, SHIFT);
+        assert_eq!(
+            params.target_db(),
+            -15.0,
+            "modified Enter must pass through"
+        );
+        assert!(params.rms_mode(), "modified Enter must not normalize");
+        assert!(
+            !params.match_requested(),
+            "modified Enter must not enable Match"
+        );
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.target_db(), 0.0, "Enter should activate Normalize");
+        assert!(
+            !params.rms_mode(),
+            "keyboard Normalize should force peak mode"
+        );
+        assert!(
+            params.match_requested(),
+            "keyboard Normalize should enable Match"
+        );
         pump_appkit(app, &gui, 0.12);
         eprintln!(
-            "PASS native GPUI GainSnap target selection, typing, commit, clipboard copy/cut/paste, Escape cancel, caret selection, arrows and Shift-arrows"
+            "PASS native GPUI GainSnap target selection, typing, commit, clipboard copy/cut/paste, Escape cancel, caret selection, arrows, and focused-button Space/Enter activation"
         );
         gui.close();
 

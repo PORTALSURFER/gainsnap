@@ -23,12 +23,12 @@ test = false
 bench = false
 
 [dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "c28eb9b4769c1fd62f22a387af71d670a5acdbe0", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "dae3bf1b0652bbb6c4d5055b7f45270d10c60172", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 unicode-segmentation = "1.12"
 
 [build-dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "c28eb9b4769c1fd62f22a387af71d670a5acdbe0", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "dae3bf1b0652bbb6c4d5055b7f45270d10c60172", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

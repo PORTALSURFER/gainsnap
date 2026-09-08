@@ -335,6 +335,8 @@ mod tests {
         unsafe {
             SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
             SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
+            SendMessageW(child, WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+            let _ = UpdateWindow(child);
         }
         assert!(
             shared.params.match_requested(),
@@ -366,6 +368,36 @@ mod tests {
         }
         assert!(shared.params.match_requested());
         assert_eq!(shared.params.target_db(), 0.0);
+
+        // Exercise the real Win32 text commit path as well as host-forwarded
+        // editing keys. Give GPUI a frame to install the focused input handler.
+        let target_point = point_for(48.0, 184.0);
+        unsafe {
+            SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(target_point));
+            SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(target_point));
+            SendMessageW(child, WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+            let _ = UpdateWindow(child);
+        }
+        assert_eq!(unsafe { view.onKeyDown('a' as char16, 0, 4) }, kResultOk);
+        let _ = unsafe { view.onKeyUp('a' as char16, 0, 4) };
+        for character in ['-', '1', '5'] {
+            unsafe {
+                SendMessageW(
+                    child,
+                    WM_CHAR,
+                    Some(WPARAM(character as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+        assert_eq!(unsafe { view.onKeyDown(0, 4, 0) }, kResultOk);
+        let _ = unsafe { view.onKeyUp(0, 4, 0) };
+        assert!((shared.params.target_db() - (-15.0)).abs() < 0.001);
+        assert_eq!(unsafe { view.onKeyDown(0, 12, 0) }, kResultOk);
+        let _ = unsafe { view.onKeyUp(0, 12, 0) };
+        assert_eq!(unsafe { view.onKeyDown(0, 14, 1) }, kResultOk);
+        let _ = unsafe { view.onKeyUp(0, 14, 1) };
+        assert!((shared.params.target_db() - (-14.1)).abs() < 0.001);
 
         // A DAW may hide or minimize the parent without removing IPlugView.
         shared

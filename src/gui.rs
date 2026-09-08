@@ -1260,6 +1260,13 @@ impl GainSnapEditor {
 }
 
 impl toybox::radiant_gui::RadiantEditor for GainSnapEditor {
+    fn set_visible(&mut self, visible: bool) {
+        let state = self.runtime.bridge().state();
+        if !visible && state.params.match_requested() {
+            state.toggle_value(PARAM_MATCH, false);
+        }
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         Self::resize(self, width, height);
     }
@@ -1394,7 +1401,8 @@ fn project_surface(state: &mut EditorState) -> Arc<UiSurface<EditorMessage>> {
         .style(WidgetStyle::normal(WidgetTone::Accent))
         .key("match-now")
         .width(MATCH_BUTTON_WIDTH)
-        .height(MATCH_BUTTON_HEIGHT),
+        .height(MATCH_BUTTON_HEIGHT)
+        .tooltip("Match while this window is visible; hiding it stops Match and keeps the gain"),
         custom_widget_mapped(NormalizeButtonWidget::new(), |_message: ButtonMessage| {
             EditorMessage::Normalize
         })
@@ -1521,6 +1529,100 @@ mod tests {
                 .expect("edit events should not be poisoned")
                 .push(EditEvent::End(param_id));
         }
+    }
+
+    #[test]
+    fn hidden_editor_stops_match_once_and_preserves_gain_and_mode() {
+        use toybox::radiant_gui::RadiantEditor;
+
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        params.set_param(PARAM_RMS_MODE, 1.0);
+        params.set_param(PARAM_TARGET_DB, -18.0);
+        params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, -7.5);
+        let sink = Arc::new(RecordingEditSink::default());
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            Some(sink.clone()),
+        );
+        editor.set_visible(true);
+        editor.dispatch_event(Event::clear_focus());
+        assert!(params.match_requested(), "focus changes must keep matching");
+        assert!(sink.events().is_empty());
+
+        editor.set_visible(false);
+        editor.set_visible(false);
+        editor.set_visible(true);
+        assert!(
+            !params.match_requested(),
+            "reopening must not restart Match"
+        );
+        assert_eq!(params.locked_gain_db(), -7.5);
+        assert_eq!(params.get_param(PARAM_TARGET_DB), Some(-18.0));
+        assert_eq!(params.get_param(PARAM_RMS_MODE), Some(1.0));
+        assert_eq!(
+            sink.events(),
+            vec![
+                EditEvent::Begin(PARAM_MATCH),
+                EditEvent::Value(PARAM_MATCH, 0.0),
+                EditEvent::End(PARAM_MATCH),
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_editor_queues_clap_match_off_gesture() {
+        use toybox::clack_plugin::events::event_types::{
+            ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent,
+        };
+        use toybox::clack_plugin::events::io::EventBuffer;
+        use toybox::radiant_gui::RadiantEditor;
+
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let queue = Arc::new(AutomationQueue::default());
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::clone(&queue),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        editor.set_visible(false);
+        let mut buffer = EventBuffer::new();
+        let mut scratch = Vec::new();
+        let stats = queue.drain_to_output(&mut buffer.as_output(), &mut scratch);
+        assert_eq!(stats.pushed, 3);
+        assert_eq!(stats.failed, 0);
+        assert_eq!(
+            buffer
+                .get(0)
+                .unwrap()
+                .as_event::<ParamGestureBeginEvent>()
+                .unwrap()
+                .param_id(),
+            Some(PARAM_MATCH)
+        );
+        let value = buffer
+            .get(1)
+            .unwrap()
+            .as_event::<ParamValueEvent>()
+            .unwrap();
+        assert_eq!(value.param_id(), Some(PARAM_MATCH));
+        assert_eq!(value.value(), 0.0);
+        assert_eq!(
+            buffer
+                .get(2)
+                .unwrap()
+                .as_event::<ParamGestureEndEvent>()
+                .unwrap()
+                .param_id(),
+            Some(PARAM_MATCH)
+        );
+        assert!(!params.match_requested());
     }
 
     fn editor_state() -> EditorState {

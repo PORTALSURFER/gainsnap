@@ -1288,14 +1288,13 @@ impl toybox::radiant_gui::RadiantEditor for GainSnapEditor {
         key: WidgetKey,
         modifiers: radiant::widgets::KeyboardModifiers,
     ) -> bool {
-        self.runtime
-            .dispatch_event(Event::pointer_modifiers_changed(
-                radiant::widgets::PointerModifiers {
-                    command: modifiers.command || (!cfg!(target_os = "macos") && modifiers.control),
-                    shift: modifiers.shift,
-                    alt: modifiers.alt,
-                },
-            ));
+        self.dispatch_event(Event::pointer_modifiers_changed(
+            radiant::widgets::PointerModifiers {
+                command: modifiers.command || (!cfg!(target_os = "macos") && modifiers.control),
+                shift: modifiers.shift,
+                alt: modifiers.alt,
+            },
+        ));
         Self::dispatch_key_press_with_modifiers(self, key, modifiers)
     }
 
@@ -2030,6 +2029,73 @@ mod tests {
 
         editor.dispatch_event(Event::pointer_modifiers_changed(PointerModifiers::default()));
         assert!(!editor.runtime.bridge().state().shift_held);
+    }
+
+    #[test]
+    fn hosted_keyboard_edits_numbers_and_steps_during_match_refresh() {
+        use toybox::radiant_gui::RadiantEditor;
+
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut editor = GainSnapEditor::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+        let center = editor
+            .paint_plan()
+            .first_text_input()
+            .unwrap()
+            .rect
+            .center();
+        editor.dispatch_event(Event::primary_press(center));
+        editor.dispatch_event(Event::primary_release(center));
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::End,
+            radiant::widgets::KeyboardModifiers::default()
+        ));
+        for _ in 0..5 {
+            assert!(RadiantEditor::dispatch_key_press(
+                &mut editor,
+                WidgetKey::Backspace,
+                radiant::widgets::KeyboardModifiers::default()
+            ));
+            editor.paint_plan();
+        }
+        for character in "-8.5".chars() {
+            assert!(RadiantEditor::dispatch_character(&mut editor, character));
+            editor.paint_plan();
+        }
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::Enter,
+            radiant::widgets::KeyboardModifiers::default()
+        ));
+        assert_eq!(params.target_db(), -8.5);
+        assert_eq!(
+            editor.paint_plan().first_text_input().unwrap().state.value,
+            "-8.5"
+        );
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::ArrowUp,
+            radiant::widgets::KeyboardModifiers::default()
+        ));
+        assert_eq!(params.target_db(), -7.5);
+        editor.paint_plan();
+        assert!(RadiantEditor::dispatch_key_press(
+            &mut editor,
+            WidgetKey::ArrowDown,
+            radiant::widgets::KeyboardModifiers {
+                shift: true,
+                ..radiant::widgets::KeyboardModifiers::default()
+            }
+        ));
+        assert_eq!(params.target_db(), -7.6);
+        assert!(editor.paint_plan().first_text_input().unwrap().focused);
     }
 
     #[test]

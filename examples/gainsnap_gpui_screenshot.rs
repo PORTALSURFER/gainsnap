@@ -9,10 +9,10 @@ mod macos {
     use cocoa::foundation::{NSAutoreleasePool, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
     use gainsnap::gui_gpui::{new_screenshot_gui, WINDOW_HEIGHT, WINDOW_WIDTH};
     use image::{imageops::FilterType, ImageFormat, RgbaImage};
-    use objc::runtime::{Object, NO, YES};
+    use objc::runtime::{Object, BOOL, NO, YES};
     use objc::{class, msg_send, sel, sel_impl};
     use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
     use std::thread;
@@ -24,6 +24,144 @@ mod macos {
     struct NativeFixture {
         window: id,
         view: id,
+    }
+
+    struct PasteboardSnapshot {
+        items: Vec<PasteboardItemSnapshot>,
+    }
+
+    struct PasteboardItemSnapshot {
+        types: Vec<(String, Vec<u8>)>,
+    }
+
+    struct PasteboardRestore(PasteboardSnapshot);
+
+    impl PasteboardRestore {
+        unsafe fn capture() -> Self {
+            Self(PasteboardSnapshot::capture())
+        }
+    }
+
+    impl Drop for PasteboardRestore {
+        fn drop(&mut self) {
+            unsafe {
+                self.0.restore();
+            }
+        }
+    }
+
+    impl PasteboardSnapshot {
+        unsafe fn capture() -> Self {
+            let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return Self { items: Vec::new() };
+            }
+            let pasteboard_items: id = msg_send![pasteboard, pasteboardItems];
+            if pasteboard_items.is_null() {
+                return Self { items: Vec::new() };
+            }
+            let item_count: usize = msg_send![pasteboard_items, count];
+            let mut items = Vec::with_capacity(item_count);
+            for item_index in 0..item_count {
+                let item: id = msg_send![pasteboard_items, objectAtIndex: item_index];
+                if item.is_null() {
+                    continue;
+                }
+                let item_types: id = msg_send![item, types];
+                if item_types.is_null() {
+                    items.push(PasteboardItemSnapshot { types: Vec::new() });
+                    continue;
+                }
+                let type_count: usize = msg_send![item_types, count];
+                let mut types = Vec::with_capacity(type_count);
+                for type_index in 0..type_count {
+                    let type_object: id = msg_send![item_types, objectAtIndex: type_index];
+                    let type_name =
+                        ns_string(type_object).expect("pasteboard type should expose UTF-8 text");
+                    let data: id = msg_send![item, dataForType: type_object];
+                    let data_length = if data.is_null() {
+                        0
+                    } else {
+                        msg_send![data, length]
+                    };
+                    let bytes = if data_length == 0 {
+                        Vec::new()
+                    } else {
+                        let pointer: *const u8 = msg_send![data, bytes];
+                        assert!(!pointer.is_null(), "pasteboard data should have bytes");
+                        std::slice::from_raw_parts(pointer, data_length).to_vec()
+                    };
+                    types.push((type_name, bytes));
+                }
+                items.push(PasteboardItemSnapshot { types });
+            }
+            Self { items }
+        }
+
+        unsafe fn restore(&self) {
+            let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return;
+            }
+            let _: isize = msg_send![pasteboard, clearContents];
+            if self.items.is_empty() {
+                return;
+            }
+            let objects: id =
+                msg_send![class!(NSMutableArray), arrayWithCapacity: self.items.len()];
+            if objects.is_null() {
+                return;
+            }
+            for snapshot in &self.items {
+                let allocated: id = msg_send![class!(NSPasteboardItem), alloc];
+                let item: id = msg_send![allocated, init];
+                if item.is_null() {
+                    continue;
+                }
+                for (type_name, bytes) in &snapshot.types {
+                    let type_c_string = CString::new(type_name.as_bytes())
+                        .expect("pasteboard type should not contain nul");
+                    let type_object: id = msg_send![
+                        class!(NSString),
+                        stringWithUTF8String: type_c_string.as_ptr()
+                    ];
+                    if type_object.is_null() {
+                        continue;
+                    }
+                    let data: id = msg_send![
+                        class!(NSData),
+                        dataWithBytes: bytes.as_ptr()
+                        length: bytes.len()
+                    ];
+                    let _: BOOL = msg_send![item, setData: data forType: type_object];
+                }
+                let _: () = msg_send![objects, addObject: item];
+                let _: () = msg_send![item, release];
+            }
+            let _: BOOL = msg_send![pasteboard, writeObjects: objects];
+        }
+    }
+
+    unsafe fn ns_string(value: id) -> Option<String> {
+        if value.is_null() {
+            return None;
+        }
+        let pointer: *const i8 = msg_send![value, UTF8String];
+        if pointer.is_null() {
+            return None;
+        }
+        CStr::from_ptr(pointer).to_str().ok().map(str::to_owned)
+    }
+
+    unsafe fn pasteboard_string() -> Option<String> {
+        let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+        let type_name = CString::new("public.utf8-plain-text").expect("static type name");
+        let type_object: id = msg_send![
+            class!(NSString),
+            stringWithUTF8String: type_name.as_ptr()
+        ];
+        let value: id = msg_send![pasteboard, stringForType: type_object];
+        ns_string(value)
     }
 
     impl NativeFixture {
@@ -137,6 +275,10 @@ mod macos {
 
     unsafe fn exercise_native_target_input(fixture: &NativeFixture) {
         let app = NSApp();
+        // The fixture owns no clipboard data. Snapshot every item and every
+        // materialized type before exercising the editor so a failed native
+        // assertion cannot leave the user's clipboard changed.
+        let _pasteboard_restore = PasteboardRestore::capture();
         let (mut gui, params) = gainsnap::gui_gpui::new_screenshot_gui_with_params(false, false);
         gui.set_parent_raw(fixture.parent_handle());
         assert!(gui.open(), "GPUI input fixture should open");
@@ -181,8 +323,67 @@ mod macos {
             -14.1,
             "native arrows should step the target"
         );
+
+        // Start the clipboard checks from a committed, known value. Each
+        // native key event pumps the host loop, so the editor's live meter
+        // updates continue while selection and clipboard actions run.
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "-", 27, 0);
+        send_key(app, fixture.window, &gui, "1", 18, 0);
+        send_key(app, fixture.window, &gui, "5", 23, 0);
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(
+            params.target_db(),
+            -15.0,
+            "clipboard test should start at -15 dB"
+        );
+
+        // Cmd+C exercises the GPUI action through the real AppKit pasteboard.
+        // Readback is asserted without printing the clipboard contents.
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert_eq!(
+            pasteboard_string(),
+            Some("-15.0".to_owned()),
+            "copy should write the selected target text"
+        );
+
+        // Cmd+X removes the selection and Cmd+V reads the same native
+        // pasteboard data through Toybox's platform clipboard bridge. A
+        // second copy confirms the cut did not leave duplicate text behind.
+        send_key(app, fixture.window, &gui, "x", 7, COMMAND);
+        send_key(app, fixture.window, &gui, "v", 9, COMMAND);
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert_eq!(
+            pasteboard_string(),
+            Some("-15.0".to_owned()),
+            "cut then paste should restore one target value"
+        );
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.target_db(), -15.0, "pasted target should commit");
+
+        // Insert an invalid draft, then cancel it with Escape. This checks the
+        // native cancel action without changing the committed parameter.
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "x", 7, 0);
+        pump_appkit(app, &gui, 0.08);
+        send_key(app, fixture.window, &gui, "\u{1b}", 53, 0);
+        assert_eq!(params.target_db(), -15.0, "Escape should cancel the draft");
+
+        // Home plus Shift+Right selects one grapheme from the caret. Copying
+        // it checks that the selection is routed to the native clipboard.
+        send_key(app, fixture.window, &gui, "\u{f729}", 115, 0);
+        send_key(app, fixture.window, &gui, "\u{f703}", 124, SHIFT);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert_eq!(
+            pasteboard_string(),
+            Some("-".to_owned()),
+            "caret selection should copy the selected grapheme"
+        );
+        pump_appkit(app, &gui, 0.12);
         eprintln!(
-            "PASS native GPUI GainSnap target selection, typing, commit, arrows and Shift-arrows"
+            "PASS native GPUI GainSnap target selection, typing, commit, clipboard copy/cut/paste, Escape cancel, caret selection, arrows and Shift-arrows"
         );
         gui.close();
 

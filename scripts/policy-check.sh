@@ -70,28 +70,29 @@ coverage_supported_for() {
   " "${file}"
 }
 
-has_screenshot_symbol_in_src() {
-  src_files="$(git ls-files | grep -E '^src/.*[.]rs$' || true)"
+has_screenshot_symbol() {
+  src_files="$(git ls-files | grep -E '^(src|tests)/.*[.]rs$' || true)"
   [ -n "${src_files}" ] || return 1
   # shellcheck disable=SC2086
   echo "${src_files}" | xargs grep -n 'screenshot_renders_initial_ui' >/dev/null 2>&1
 }
 
 # Screenshot coverage checks (meta-workspace only):
-# If this plugin has a src/gui.rs, then either:
+# If this plugin has a Radiant or GPUI editor source, then either:
 # - it provides screenshot coverage via screenshot-test + screenshot_renders_initial_ui, or
 # - it is explicitly marked unsupported in the meta-root coverage policy file.
 #
 # This check is skipped when the coverage file is not available (for example:
 # when running inside the standalone plugin repo outside the meta workspace).
-if git ls-files --error-unmatch src/gui.rs >/dev/null 2>&1; then
+if git ls-files --error-unmatch src/gui.rs >/dev/null 2>&1 ||
+   git ls-files --error-unmatch src/gui_gpui.rs >/dev/null 2>&1; then
   has_screenshot_feature=0
   if grep -qE '^[[:space:]]*screenshot-test[[:space:]]*=' Cargo.toml; then
     has_screenshot_feature=1
   fi
 
   has_screenshot_symbol=0
-  if has_screenshot_symbol_in_src; then
+  if has_screenshot_symbol; then
     has_screenshot_symbol=1
   fi
 
@@ -102,9 +103,9 @@ if git ls-files --error-unmatch src/gui.rs >/dev/null 2>&1; then
       if [ "${supported}" = "false" ]; then
         : # explicitly unsupported; ok
       elif [ "${supported}" = "true" ]; then
-        fail "${plugin_name} has src/gui.rs but does not provide screenshot_renders_initial_ui with screenshot-test; coverage policy marks it supported (${coverage_file})"
+        fail "${plugin_name} has an editor source but does not provide screenshot_renders_initial_ui with screenshot-test; coverage policy marks it supported (${coverage_file})"
       else
-        fail "${plugin_name} has src/gui.rs but has no screenshot coverage and no coverage policy entry in ${coverage_file}"
+        fail "${plugin_name} has an editor source but has no screenshot coverage and no coverage policy entry in ${coverage_file}"
       fi
     fi
   else

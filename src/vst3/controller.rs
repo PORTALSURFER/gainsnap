@@ -196,14 +196,19 @@ impl IEditControllerTrait for GainSnapVst3Controller {
 
             let shared = self.shared();
             let adapter = gui_adapter::new_gui(shared, Arc::clone(&self.component_handler));
-            let view =
-                HostedVst3View::new(adapter, crate::gui::WINDOW_WIDTH, crate::gui::WINDOW_HEIGHT)
-                    .with_size_bounds(
-                        crate::gui::MIN_WINDOW_WIDTH,
-                        crate::gui::MIN_WINDOW_HEIGHT,
-                        crate::gui::MAX_WINDOW_WIDTH,
-                        crate::gui::MAX_WINDOW_HEIGHT,
-                    );
+            let view = toybox::vst3::prelude::create_gpui_view(
+                adapter,
+                crate::gui_gpui::WINDOW_WIDTH,
+                crate::gui_gpui::WINDOW_HEIGHT,
+                (
+                    crate::gui_gpui::MIN_WINDOW_WIDTH,
+                    crate::gui_gpui::MIN_WINDOW_HEIGHT,
+                ),
+                (
+                    crate::gui_gpui::MAX_WINDOW_WIDTH,
+                    crate::gui_gpui::MAX_WINDOW_HEIGHT,
+                ),
+            );
             let Some(view) = ComWrapper::new(view).to_com_ptr::<IPlugView>() else {
                 return ptr::null_mut();
             };
@@ -254,7 +259,6 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn windows_editor_attaches_handles_input_resizes_and_reopens() {
-        use toybox::radiant_gui::RadiantEditor;
         use windows::core::w;
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::Graphics::Gdi::UpdateWindow;
@@ -313,18 +317,6 @@ mod tests {
             }
         }
 
-        let mut preview = crate::gui::GainSnapEditor::new(
-            Arc::clone(&shared.params),
-            Arc::new(toybox::clap::automation::AutomationQueue::default()),
-            Arc::clone(&shared.status),
-            None,
-            None,
-        );
-        let center = RadiantEditor::paint_plan(&mut preview)
-            .first_text_run("MATCH")
-            .expect("visible Match label")
-            .rect
-            .center();
         let mut rect = ViewRect {
             left: 0,
             top: 0,
@@ -332,11 +324,14 @@ mod tests {
             bottom: 0,
         };
         assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
-        let scale = (rect.right - rect.left) as f32 / crate::gui::WINDOW_WIDTH as f32;
-        let point = LPARAM(
-            (center.x.mul_add(scale, 0.0) as isize & 0xffff)
-                | ((center.y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
-        );
+        let scale = (rect.right - rect.left) as f32 / crate::gui_gpui::WINDOW_WIDTH as f32;
+        let point_for = |x: f32, y: f32| -> LPARAM {
+            LPARAM(
+                (x.mul_add(scale, 0.0) as isize & 0xffff)
+                    | ((y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
+            )
+        };
+        let point = point_for(144.0, 85.0);
         unsafe {
             SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
             SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
@@ -356,19 +351,13 @@ mod tests {
         }
         assert!(
             !shared.params.match_requested(),
-            "native keyboard must not duplicate VST3 input"
+            "a text commit must not activate the focused Match button"
         );
 
-        for (label, rms) in [("PEAK", true), ("Normalize", false)] {
-            let center = RadiantEditor::paint_plan(&mut preview)
-                .first_text_run(label)
-                .expect("mode and normalize controls")
-                .rect
-                .center();
-            let point = LPARAM(
-                (center.x.mul_add(scale, 0.0) as isize & 0xffff)
-                    | ((center.y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
-            );
+        for (point, rms) in [
+            (point_for(144.0, 51.0), true),
+            (point_for(144.0, 119.0), false),
+        ] {
             unsafe {
                 SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
                 SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));

@@ -50,7 +50,7 @@ not handled by the bootstrap credentials stage):
   when: Required only when publishing a production release.
   why: Existing per-product release upload credential used by the pinned publisher; it is not passed to the Windows job.
 
-The pinned PORTALSURFER/radiant dependency is public; generated workflows do not require a repository token.
+The pinned PORTALSURFER/toybox and GPUI dependencies are public; generated workflows do not require a repository token.
 The per-product PortalSurfer release credential is provisioned by the separate publisher stage after the landing page has been deployed; it is not entered in this ordinary credentials stage. The publisher-integration App ID/key are workflow configuration, and the bootstrapper does not provision them.
 
 Not managed by the credentials stage; configure these directly before the relevant operation:
@@ -102,7 +102,7 @@ cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --
 
 The stage first runs `gh auth status` without `--show-token`, verifies repository `ADMIN` access, checks the repository and production-environment Actions public keys, and inventories names only. It then displays the checkpoint and requires the exact confirmation `SET CREDENTIALS gainsnap`. Secret prompts disable terminal echo; values go to `gh secret set` through child-process standard input with no value-bearing argument (the `--body` option is omitted so gh reads standard input), are not put in arguments/files/environment/logs, and are dropped after each update. An existing value can be retained with a blank prompt. For Apple credentials, `--apple-cert-path PATH` reads a regular `.p12` and `--apple-notary-key-path PATH` reads a regular `.p8` only after the gate; each is bounded, base64-encoded in memory, and streamed to its matching GitHub secret. These file options require `--execute`; plan mode never reads them. The CLI rejects non-interactive execute mode and never accepts secret values through arguments or environment variables.
 
-`PORTALSURFER/radiant` is public, so generated workflows fetch its pinned dependency directly without a repository credential.
+`PORTALSURFER/toybox` and the public GPUI source fork are public, so generated workflows fetch the pinned dependencies directly without a repository credential.
 
 The separate publisher stage provisions the per-product PortalSurfer release credential after the product is registered and reachable. It does not ask you to invent or paste a bearer token.
 

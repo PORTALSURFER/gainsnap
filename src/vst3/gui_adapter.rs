@@ -1,4 +1,4 @@
-//! VST3 component-handler bridge for the shared Radiant editor.
+//! VST3 component-handler bridge for the shared GPUI editor.
 
 use std::sync::Arc;
 
@@ -7,12 +7,12 @@ use toybox::clap::automation::{AutomationConfig, AutomationQueue};
 use toybox::vst3::prelude::Steinberg::Vst::IComponentHandler;
 use toybox::vst3::prelude::*;
 
-use crate::gui::HostParamEditSink;
+use crate::gui_gpui::HostParamEditSink;
 
 use super::param_bridge;
 use super::shared_state::{ComponentHandlerOwner, GainSnapVst3Shared};
 
-/// Forwards Radiant gestures to the VST3 host's component handler.
+/// Forwards GPUI gestures to the VST3 host's component handler.
 pub(super) struct Vst3HostParamEditSink {
     component_handler: Arc<ComponentHandlerOwner>,
 }
@@ -77,24 +77,12 @@ impl HostParamEditSink for Vst3HostParamEditSink {
 pub(super) fn new_gui(
     shared: Arc<GainSnapVst3Shared>,
     component_handler: Arc<ComponentHandlerOwner>,
-) -> toybox::radiant_gui::RadiantHostedGui {
+) -> toybox::gpui_gui::GpuiHostedGui {
     let sink = Arc::new(Vst3HostParamEditSink::new(component_handler));
-    let editor = crate::gui::GainSnapEditor::new(
+    crate::gui_gpui::new_gui_with_edit_sink(
         Arc::clone(&shared.params),
         Arc::new(AutomationQueue::default()),
         Arc::clone(&shared.status),
-        None,
-        Some(sink),
-    );
-    toybox::radiant_gui::RadiantHostedGui::new(
-        "GainSnapRadiantVst3EditorView",
-        editor,
-        crate::gui::WINDOW_WIDTH,
-        crate::gui::WINDOW_HEIGHT,
-    )
-    .with_size_contract(
-        (crate::gui::MIN_WINDOW_WIDTH, crate::gui::MIN_WINDOW_HEIGHT),
-        (crate::gui::WINDOW_WIDTH, crate::gui::WINDOW_HEIGHT),
-        (crate::gui::MAX_WINDOW_WIDTH, crate::gui::MAX_WINDOW_HEIGHT),
+        sink,
     )
 }

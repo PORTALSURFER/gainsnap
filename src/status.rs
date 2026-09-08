@@ -18,10 +18,7 @@ pub enum MatchState {
 
 impl MatchState {
     /// Decode the compact atomic representation, defaulting safely to ready.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     pub fn from_raw(value: u32) -> Self {
         match value {
             1 => Self::Measuring,
@@ -90,10 +87,7 @@ impl GuiStatus {
     }
 
     /// Read the selected output measurement for the editor.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     pub fn output_level_db(&self, rms: bool) -> f32 {
         if rms {
             read_f32(&self.output_rms_db)
@@ -103,56 +97,40 @@ impl GuiStatus {
     }
 
     /// Read the most recent input peak in decibels.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     #[allow(dead_code)]
     pub fn input_peak_db(&self) -> f32 {
         read_f32(&self.input_peak_db)
     }
 
     /// Read the most recent output peak in decibels.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     pub fn output_peak_db(&self) -> f32 {
         read_f32(&self.output_peak_db)
     }
 
     /// Read the held gain in decibels.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
+    #[allow(dead_code)]
     pub fn locked_gain_db(&self) -> f32 {
         read_f32(&self.locked_gain_db)
     }
 
     /// Read measurement progress from zero to one.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
+    #[allow(dead_code)]
     pub fn progress(&self) -> f32 {
         read_f32(&self.progress).clamp(0.0, 1.0)
     }
 
     /// Read the current matcher state.
-    #[cfg(all(
-        any(target_os = "macos", target_os = "windows"),
-        feature = "radiant-gui"
-    ))]
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     pub fn state(&self) -> MatchState {
         MatchState::from_raw(self.state.load(Ordering::Relaxed))
     }
 }
 
-#[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
-    feature = "radiant-gui"
-))]
+#[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
 fn read_f32(value: &AtomicU32) -> f32 {
     f32::from_bits(value.load(Ordering::Relaxed))
 }

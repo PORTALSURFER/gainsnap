@@ -19,7 +19,7 @@ is disabled early. Output metering includes this protection.
 The startup fade follows the peak guard, bounding strong bursts throughout the
 fade. The 208 × 212 editor groups its controls tightly; the Match button and
 status dot share a pulse while Match is enabled. Both macOS and Windows use
-Toybox's native Radiant host, including keyboard, focus, and DPI conversion.
+Toybox's embedded GPUI host, including keyboard, focus, and DPI conversion.
 
 The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). RMS uses the strongest
 complete 300 ms sliding mean-square window, with the louder channel setting the

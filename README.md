@@ -13,16 +13,21 @@ target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
 The PEAK/RMS button selects the matching measurement and output meter. Peak
-remains the default, including when loading older projects. RMS uses a 300 ms
-exponential mean-square average of each channel and links gain to the louder
-channel, preserving stereo balance. The scale uses a full-scale square wave as
-0 dBFS RMS; a full-scale sine reads about -3.01 dBFS RMS. The mode is saved with
-the project and can be automated in CLAP and VST3.
+remains the default, including when loading older projects. RMS matching uses
+the strongest complete 300 ms sliding mean-square window of each channel and
+links gain to the louder channel, preserving stereo balance. The output meter
+shows the latest 300 ms sliding RMS window. The scale uses a full-scale square
+wave as 0 dBFS RMS; a full-scale sine reads about -3.01 dBFS RMS. The mode is
+saved with the project and can be automated in CLAP and VST3.
 
 RMS matching observes the first 300 ms using conservative peak correction,
-then follows the changing average. Silence holds the gain; after two seconds
-of silence, returning audio gets a fresh protected startup. RMS permits peaks
-above its average target, with the existing 0 dBFS sample-peak guard still active.
+then holds the strongest complete window from the current measurement instead
+of boosting decaying tails, gaps, or quieter passages. Silence after an observed
+hit still completes that hit's window; after two seconds of silence, returning
+audio gets a fresh protected startup. Restart Match to measure a quieter passage
+afresh. RMS permits peaks above its average target, but requested gain is bounded
+by the headroom of the largest observed sample peak; the existing 0 dBFS
+sample-peak guard remains active as a safety net.
 Targets that would require clipping or more than ±24 dB correction cannot be
 reached; the meter always shows the actual protected output. Normalize switches
 to PEAK, sets 0 dBFS, and starts Match.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Change RMS Match to retain the strongest complete 300 ms sliding RMS window,
+  preventing beat gaps and quieter passages from increasing gain; bound requested
+  RMS gain by observed sample-peak headroom before the output safety guard.
 - Add a saved, automatable PEAK/RMS mode toggle with RMS-based live matching and output metering.
 - Keep Normalize as peak normalization, automatically selecting PEAK mode.
 

@@ -4,23 +4,36 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 resolver = "2"
+autoexamples = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["radiant-gui"]
-radiant-gui = ["toybox/radiant-gui", "dep:radiant"]
-vst3 = ["toybox/radiant-vst3", "radiant-gui"]
-screenshot-test = ["dep:image", "radiant-gui"]
+default = ["gpui-gui"]
+gpui-gui = ["toybox/gpui-gui"]
+vst3 = ["toybox/gpui-vst3", "gpui-gui"]
+screenshot-test = ["dep:image", "gpui-gui"]
+
+[[bin]]
+name = "gainsnap_gpui_screenshot"
+path = "examples/gainsnap_gpui_screenshot.rs"
+required-features = ["screenshot-test"]
+test = false
+bench = false
 
 [dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "e0090c1debf1bae9156e57415085b170cc35ee90", default-features = false }
-radiant = { git = "https://github.com/PORTALSURFER/radiant.git", rev = "7001b84b2c7edd4a286d167c183a5b35366156fc", default-features = false, optional = true }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "dae3bf1b0652bbb6c4d5055b7f45270d10c60172", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+unicode-segmentation = "1.12"
 
 [build-dependencies]
-toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "e0090c1debf1bae9156e57415085b170cc35ee90", default-features = false }
+toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "dae3bf1b0652bbb6c4d5055b7f45270d10c60172", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+raw-window-handle = "0.5.2"
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

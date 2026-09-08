@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Restore macOS VST3 arrow-key and numeric target entry after the shared Windows editor update; preserve keyboard modifiers for fine steps and text selection.
-
 - Add a saved, automatable PEAK/RMS mode toggle with RMS-based live matching and output metering.
 - Keep Normalize as peak normalization, automatically selecting PEAK mode.
 

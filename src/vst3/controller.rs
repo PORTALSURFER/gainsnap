@@ -260,8 +260,9 @@ mod tests {
         use windows::Win32::Graphics::Gdi::UpdateWindow;
         use windows::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindow, IsWindow, PeekMessageW,
-            SendMessageW, TranslateMessage, GW_CHILD, MSG, PM_REMOVE, WM_CHAR, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WS_OVERLAPPEDWINDOW,
+            SendMessageW, ShowWindow, TranslateMessage, GW_CHILD, MSG, PM_REMOVE, SW_HIDE,
+            SW_MINIMIZE, SW_RESTORE, SW_SHOW, WM_CHAR, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_TIMER,
+            WS_OVERLAPPEDWINDOW,
         };
 
         struct Parent(HWND);
@@ -289,6 +290,7 @@ mod tests {
             }
             .expect("create a real Windows host parent"),
         );
+        let _ = unsafe { ShowWindow(parent.0, SW_SHOW) };
         let controller = GainSnapVst3Controller::new();
         let shared = controller.shared();
         let raw = unsafe { controller.createView(ViewType::kEditor) };
@@ -376,18 +378,57 @@ mod tests {
         assert!(shared.params.match_requested());
         assert_eq!(shared.params.target_db(), 0.0);
 
+        // A DAW may hide or minimize the parent without removing IPlugView.
+        shared
+            .params
+            .set_param(crate::params::PARAM_LOCKED_GAIN_DB, -7.5);
+        for hide in [SW_HIDE, SW_MINIMIZE] {
+            shared.params.set_param(crate::params::PARAM_MATCH, 1.0);
+            let _ = unsafe { view.onFocus(0) };
+            assert!(
+                shared.params.match_requested(),
+                "focus loss keeps Match active"
+            );
+            unsafe {
+                let _ = ShowWindow(parent.0, hide);
+                SendMessageW(child, WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+            }
+            assert!(
+                !shared.params.match_requested(),
+                "hidden parent stops Match"
+            );
+            assert_eq!(shared.params.locked_gain_db(), -7.5);
+            unsafe {
+                let _ = ShowWindow(parent.0, SW_RESTORE);
+                SendMessageW(child, WM_TIMER, Some(WPARAM(1)), Some(LPARAM(0)));
+            }
+            assert!(
+                !shared.params.match_requested(),
+                "restoring must not restart Match"
+            );
+        }
+        shared.params.set_param(crate::params::PARAM_MATCH, 1.0);
+
         rect.right = (312.0 * scale) as i32;
         rect.bottom = (318.0 * scale) as i32;
         assert_eq!(unsafe { view.checkSizeConstraint(&mut rect) }, kResultOk);
         assert_eq!(unsafe { view.onSize(&mut rect) }, kResultOk);
         assert_eq!(unsafe { view.removed() }, kResultOk);
         assert!(!unsafe { IsWindow(Some(child)) }.as_bool());
+        assert!(
+            !shared.params.match_requested(),
+            "removing the view stops Match"
+        );
         assert_eq!(
             unsafe { view.attached(parent.0 .0, kPlatformTypeHWND) },
             kResultOk
         );
         let reopened = unsafe { GetWindow(parent.0, GW_CHILD) }.expect("reopened child");
         assert!(unsafe { IsWindow(Some(reopened)) }.as_bool());
+        assert!(
+            !shared.params.match_requested(),
+            "reopening keeps Match off"
+        );
         assert_eq!(unsafe { view.removed() }, kResultOk);
     }
 

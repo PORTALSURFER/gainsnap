@@ -4,7 +4,7 @@
 "slug": "gainsnap",
 "display_name": "GainSnap",
 "category": "Utility",
-"tagline": "Toggle peak matching for Ableton tracks",
+"tagline": "Peak and RMS level matching for your DAW",
 "description": "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale. A small triangle beside the meter marks the target and acts as the target control.",
 "repository": "PORTALSURFER/gainsnap",
 "landing_path": "/plugins/gainsnap/",

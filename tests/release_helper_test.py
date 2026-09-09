@@ -388,7 +388,7 @@ class ReleaseHelperTests(unittest.TestCase):
             },
         )
         landing = json.loads((project / "site" / "landing-page.json").read_text(encoding="utf-8"))
-        self.assertTrue(any("Windows x86_64 VST3" in feature for feature in landing["features"]))
+        self.assertEqual(set(landing["formats"]), {"CLAP", "VST3"})
         self.assertEqual(landing["downloads"]["state"], "active")
 
 

@@ -1,6 +1,6 @@
 # GainSnap
 
-Toggle peak matching for Ableton tracks
+Peak and RMS level matching for your DAW
 
 AudioDev plug-in repository (gainsnap), category **Utility**.
 
@@ -86,7 +86,7 @@ release identity. Windows receives no Apple or PortalSurfer credentials.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Toggle peak matching for Ableton tracks" --description "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale and target marker."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Peak and RMS level matching for your DAW" --description "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale and target marker."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

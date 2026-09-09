@@ -82,6 +82,10 @@ and `scripts/windows_release_helper.py` validate the bundle layout, PE
 architecture, absence of Authenticode signing, dependency pins, and shared
 release identity. Windows receives no Apple or PortalSurfer credentials.
 
+Nightlies prepare a protected patch-version bump before release; retries reuse
+the unpublished version. See [docs/NIGHTLY_RELEASES.md](docs/NIGHTLY_RELEASES.md)
+for scheduler commands, approval gates, and retry behavior.
+
 ## Staged bootstrap
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:

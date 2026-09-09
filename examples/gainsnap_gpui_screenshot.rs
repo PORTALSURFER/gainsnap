@@ -252,6 +252,19 @@ mod macos {
         }
     }
 
+    unsafe fn select_target_with_mouse(window: id) {
+        let window_number: isize = msg_send![window, windowNumber];
+        for (event_type, x) in [(1_usize, 78.0), (6_usize, 1.0), (2_usize, 1.0)] {
+            let event: id = msg_send![class!(NSEvent),
+                mouseEventWithType: event_type
+                location: NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - 184.0)
+                modifierFlags: 0_u64 timestamp: 0.0_f64 windowNumber: window_number
+                context: std::ptr::null_mut::<Object>() eventNumber: 1_isize
+                clickCount: 1_isize pressure: 1.0_f64];
+            let _: () = msg_send![window, sendEvent: event];
+        }
+    }
+
     unsafe fn send_key(
         app: id,
         window: id,
@@ -398,9 +411,8 @@ mod macos {
         // Readback is asserted without printing the clipboard contents.
         send_key(app, fixture.window, &gui, "a", 0, COMMAND);
         send_key(app, fixture.window, &gui, "c", 8, COMMAND);
-        assert_eq!(
-            pasteboard_string(),
-            Some("-15.0".to_owned()),
+        assert!(
+            pasteboard_string().as_deref() == Some("-15.0"),
             "copy should write the selected target text"
         );
 
@@ -411,9 +423,8 @@ mod macos {
         send_key(app, fixture.window, &gui, "v", 9, COMMAND);
         send_key(app, fixture.window, &gui, "a", 0, COMMAND);
         send_key(app, fixture.window, &gui, "c", 8, COMMAND);
-        assert_eq!(
-            pasteboard_string(),
-            Some("-15.0".to_owned()),
+        assert!(
+            pasteboard_string().as_deref() == Some("-15.0"),
             "cut then paste should restore one target value"
         );
         send_key(app, fixture.window, &gui, "\r", 36, 0);
@@ -432,10 +443,129 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f729}", 115, 0);
         send_key(app, fixture.window, &gui, "\u{f703}", 124, SHIFT);
         send_key(app, fixture.window, &gui, "c", 8, COMMAND);
-        assert_eq!(
-            pasteboard_string(),
-            Some("-".to_owned()),
+        assert!(
+            pasteboard_string().as_deref() == Some("-"),
             "caret selection should copy the selected grapheme"
+        );
+
+        send_key(app, fixture.window, &gui, "\u{f703}", 124, SHIFT);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert!(
+            pasteboard_string().as_deref() == Some("-1"),
+            "repeated Shift+Right expands selection"
+        );
+        send_key(app, fixture.window, &gui, "\u{f702}", 123, SHIFT);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert!(
+            pasteboard_string().as_deref() == Some("-"),
+            "Shift+Left shrinks selection from its caret"
+        );
+
+        // Replace a keyboard-selected digit using real native caret events.
+        send_key(app, fixture.window, &gui, "\u{f729}", 115, 0);
+        send_key(app, fixture.window, &gui, "\u{f703}", 124, 0);
+        send_key(app, fixture.window, &gui, "\u{f703}", 124, 0);
+        send_key(app, fixture.window, &gui, "\u{f703}", 124, SHIFT);
+        let (w, h, pixels) = gui.capture_rgba().expect("selected numeric field capture");
+        write_capture(&output_root(), "target-selection", w, h, pixels);
+        send_key(app, fixture.window, &gui, "2", 19, 0);
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(
+            params.target_db(),
+            -12.0,
+            "caret selection replaces only one digit"
+        );
+
+        select_target_with_mouse(fixture.window);
+        pump_appkit(app, &gui, 0.03);
+        send_key(app, fixture.window, &gui, "c", 8, COMMAND);
+        assert!(
+            pasteboard_string().as_deref() == Some("-12.0"),
+            "mouse drag selects target digits"
+        );
+
+        // Every VST3 Backspace representation edits the focused draft.
+        for (character, code) in [(0, 1), (127, 0), (8, 0)] {
+            send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+            for (text, key_code) in [("-", 27), ("1", 18), ("2", 19)] {
+                send_key(app, fixture.window, &gui, text, key_code, 0);
+            }
+            assert!(gui.on_key_down(character, code, 0), "Backspace is consumed");
+            send_key(app, fixture.window, &gui, "\r", 36, 0);
+            assert_eq!(params.target_db(), -1.0, "Backspace removes the last digit");
+        }
+
+        // A long draft stays editable without resizing the numeric field.
+        let (before_w, before_h, before_pixels) =
+            gui.capture_rgba().expect("stable controls capture");
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "-", 27, 0);
+        for _ in 0..40 {
+            send_key(app, fixture.window, &gui, "1", 18, 0);
+        }
+        let (w, h, pixels) = gui.capture_rgba().expect("long numeric draft capture");
+        assert_eq!((w, h), (before_w, before_h));
+        let right_controls_start = 90 * w / OUTPUT_WIDTH;
+        for y in 0..h {
+            let start = ((y * w + right_controls_start) * 4) as usize;
+            let end = (((y + 1) * w) * 4) as usize;
+            assert_eq!(
+                &pixels[start..end],
+                &before_pixels[start..end],
+                "long text must not spill into or move other controls"
+            );
+        }
+        write_capture(&output_root(), "target-long-draft", w, h, pixels);
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "-", 27, 0);
+        send_key(app, fixture.window, &gui, "1", 18, 0);
+        send_key(app, fixture.window, &gui, "2", 19, 0);
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(
+            params.target_db(),
+            -12.0,
+            "long draft can be selected and replaced"
+        );
+
+        // Selecting the triangle preserves its exact target, then arrows use
+        // the same whole/fine steps as the numeric field.
+        send_click(fixture.window, 66.0, 66.333333);
+        pump_appkit(app, &gui, 0.03);
+        assert_eq!(
+            params.target_db(),
+            -12.0,
+            "selecting arrow must not quantize target"
+        );
+        let (w, h, pixels) = gui.capture_rgba().expect("selected target arrow capture");
+        write_capture(&output_root(), "target-arrow-selected", w, h, pixels);
+        send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
+        assert_eq!(params.target_db(), -11.0);
+        send_key(app, fixture.window, &gui, "\u{f701}", 125, 0);
+        assert_eq!(params.target_db(), -12.0);
+        send_key(app, fixture.window, &gui, "\u{f700}", 126, SHIFT);
+        assert!((params.target_db() + 11.9).abs() < 0.0001);
+        send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
+        assert!((params.target_db() + 12.0).abs() < 0.0001);
+        send_key(app, fixture.window, &gui, "5", 23, 0);
+        assert!(
+            (params.target_db() + 12.0).abs() < 0.0001,
+            "unfocused text cannot edit target"
+        );
+
+        let window_number: isize = msg_send![fixture.window, windowNumber];
+        for (event_type, y) in [(1_usize, 66.333333), (6_usize, 52.0), (2_usize, 52.0)] {
+            let event: id = msg_send![class!(NSEvent),
+                mouseEventWithType: event_type
+                location: NSPoint::new(66.0, f64::from(OUTPUT_HEIGHT) - y)
+                modifierFlags: 0_u64 timestamp: 0.0_f64 windowNumber: window_number
+                context: std::ptr::null_mut::<Object>() eventNumber: 1_isize
+                clickCount: 1_isize pressure: 1.0_f64];
+            let _: () = msg_send![fixture.window, sendEvent: event];
+        }
+        pump_appkit(app, &gui, 0.03);
+        assert!(
+            params.target_db() > -11.5 && params.target_db() < -7.0,
+            "selected arrow still supports dragging"
         );
 
         // Exercise native focus plus GPUI's keyboard click path for every

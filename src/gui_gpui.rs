@@ -6,7 +6,6 @@
 //! pointer routing, and native text input/IME transport.
 
 use std::cell::RefCell;
-use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,14 +13,14 @@ use std::time::{Duration, Instant};
 use toybox::clack_plugin::utils::ClapId;
 use toybox::clap::automation::{AutomationConfig, AutomationQueue};
 use toybox::gpui::{
-    self as gpui, actions, canvas, div, fill, font, point, prelude::*, px, relative, rgba, size,
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    KeyDownEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ShapedLine, Style, Subscription, TextRun, UTF16Selection,
-    UnderlineStyle, Window,
+    self as gpui, canvas, div, fill, font, point, prelude::*, px, rgba, App, Bounds, Context,
+    Entity, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Render, Subscription, TextRun, Window,
 };
-use unicode_segmentation::UnicodeSegmentation;
+use toybox::gpui_gui::{
+    NumericInput, NumericInputCanceled, NumericInputChanged, NumericInputConfig, NumericInputRange,
+    NumericInputStepped, NumericInputStyle, NumericInputSubmitted,
+};
 
 use crate::clap_plugin::HostParamRequester;
 use crate::params::{PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
@@ -83,8 +82,6 @@ const SURFACE_PADDING_X: f32 = 16.0;
 const SURFACE_PADDING_Y: f32 = 15.0;
 const SURFACE_COLUMN_GAP: f32 = 12.0;
 const MATCH_PULSE_SECONDS: f32 = 1.2;
-const MAX_TARGET_TEXT_BYTES: usize = 64;
-
 const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target level, dBFS";
 const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Peak normalize to 0 dBFS and start Match";
 
@@ -249,7 +246,6 @@ struct EditorController {
     param_requester: Option<HostParamRequester>,
     edit_sink: Option<Arc<dyn HostParamEditSink>>,
     target_text_param: f32,
-    shift_held: bool,
     output_peak_db: f32,
     meter_last_update: Instant,
     pulse_started: Option<Instant>,
@@ -277,7 +273,6 @@ impl EditorController {
             param_requester,
             edit_sink,
             target_text_param: target_db,
-            shift_held: false,
             output_peak_db,
             meter_last_update: Instant::now(),
             pulse_started: None,
@@ -377,17 +372,6 @@ impl EditorController {
         self.set_target_from_fraction(fraction);
     }
 
-    fn step_target(&mut self, direction: TargetStepDirection) -> Option<String> {
-        let target_db = self.target_db();
-        let next_target_db = step_target_db(target_db, direction, self.shift_held);
-        if (next_target_db - target_db).abs() > TARGET_TEXT_SYNC_EPSILON {
-            self.set_target_db(next_target_db);
-        } else {
-            self.target_text_param = target_db;
-        }
-        Some(format_target_text(self.target_text_param))
-    }
-
     fn target_text_changed(&mut self, text: &str, submitted: bool) -> Option<String> {
         if let Some(value) = parse_target_text(text) {
             self.set_target_db(value);
@@ -411,10 +395,6 @@ impl EditorController {
         if !visible && self.params.match_requested() {
             self.toggle_value(PARAM_MATCH, false);
         }
-    }
-
-    fn set_shift_held(&mut self, shift_held: bool) {
-        self.shift_held = shift_held;
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
@@ -450,701 +430,72 @@ impl EditorController {
     }
 }
 
-actions!(
-    gainsnap_target_input,
-    [
-        /// Delete the character before the caret.
-        Backspace,
-        /// Delete the character after the caret.
-        Delete,
-        /// Move the caret left.
-        Left,
-        /// Move the caret right.
-        Right,
-        /// Extend the selection left by one grapheme.
-        SelectLeft,
-        /// Extend the selection right by one grapheme.
-        SelectRight,
-        /// Select the complete target value.
-        SelectAll,
-        /// Move the caret to the beginning.
-        Home,
-        /// Move the caret to the end.
-        End,
-        /// Paste clipboard text into the target field.
-        Paste,
-        /// Copy the selected target text.
-        Copy,
-        /// Cut the selected target text.
-        Cut,
-        /// Open the platform character palette.
-        ShowCharacterPalette,
-        /// Submit the target value.
-        Submit,
-        /// Cancel the current target draft.
-        Cancel,
-    ]
-);
-
-fn install_keybindings(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("backspace", Backspace, Some("TargetInput")),
-        KeyBinding::new("delete", Delete, Some("TargetInput")),
-        KeyBinding::new("left", Left, Some("TargetInput")),
-        KeyBinding::new("right", Right, Some("TargetInput")),
-        KeyBinding::new("shift-left", SelectLeft, Some("TargetInput")),
-        KeyBinding::new("shift-right", SelectRight, Some("TargetInput")),
-        KeyBinding::new("cmd-a", SelectAll, Some("TargetInput")),
-        KeyBinding::new("ctrl-a", SelectAll, Some("TargetInput")),
-        KeyBinding::new("cmd-v", Paste, Some("TargetInput")),
-        KeyBinding::new("ctrl-v", Paste, Some("TargetInput")),
-        KeyBinding::new("cmd-c", Copy, Some("TargetInput")),
-        KeyBinding::new("ctrl-c", Copy, Some("TargetInput")),
-        KeyBinding::new("cmd-x", Cut, Some("TargetInput")),
-        KeyBinding::new("ctrl-x", Cut, Some("TargetInput")),
-        KeyBinding::new("home", Home, Some("TargetInput")),
-        KeyBinding::new("end", End, Some("TargetInput")),
-        KeyBinding::new("enter", Submit, Some("TargetInput")),
-        KeyBinding::new("escape", Cancel, Some("TargetInput")),
-        KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("TargetInput")),
-    ]);
-}
-
-/// Event emitted after the target text changes through GPUI input or IME.
-pub(crate) struct TargetTextChanged;
-
-/// Event emitted when the user submits the target text with Enter.
-pub(crate) struct TargetTextSubmitted;
-
-/// Event emitted when the user cancels a target draft with Escape.
-pub(crate) struct TargetTextCanceled;
-
-/// Native GPUI target-level text field.
-pub(crate) struct TargetInput {
-    focus_handle: FocusHandle,
-    content: String,
-    selected_range: Range<usize>,
-    selection_reversed: bool,
-    marked_range: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
-    last_bounds: Option<Bounds<Pixels>>,
-}
-
-impl EventEmitter<TargetTextChanged> for TargetInput {}
-impl EventEmitter<TargetTextSubmitted> for TargetInput {}
-impl EventEmitter<TargetTextCanceled> for TargetInput {}
-
-impl TargetInput {
-    fn new(content: String, cx: &mut Context<Self>) -> Self {
-        Self {
-            focus_handle: cx.focus_handle(),
-            content,
-            selected_range: 0..0,
-            selection_reversed: false,
-            marked_range: None,
-            last_layout: None,
-            last_bounds: None,
-        }
-    }
-
-    fn focus_handle(&self) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-
-    fn content(&self) -> &str {
-        &self.content
-    }
-
-    fn set_content(&mut self, content: String, cx: &mut Context<Self>) {
-        self.content = content;
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.last_layout = None;
-        self.last_bounds = None;
-        cx.notify();
-    }
-
-    fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.move_to(self.previous_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.selected_range.start, cx);
-        }
-    }
-
-    fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.move_to(self.next_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.selected_range.end, cx);
-        }
-    }
-
-    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-    }
-
-    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
-    }
-
-    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
-    }
-
-    fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-    }
-
-    fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
-    }
-
-    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = text.replace('\r', "").replace('\n', " ");
-            self.replace_text_in_range(None, &text, window, cx);
-        }
-    }
-
-    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_owned(),
-            ));
-        }
-    }
-
-    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_owned(),
-            ));
-            self.replace_text_in_range(None, "", window, cx);
-        }
-    }
-
-    fn show_character_palette(
-        &mut self,
-        _: &ShowCharacterPalette,
-        window: &mut Window,
-        _: &mut Context<Self>,
-    ) {
-        window.show_character_palette();
-    }
-
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(TargetTextSubmitted);
-    }
-
-    fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(TargetTextCanceled);
-    }
-
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.focus_handle, cx);
-        let offset = self.index_for_mouse_position(event.position);
-        if event.modifiers.shift {
-            self.select_to(offset, cx);
-        } else {
-            self.move_to(offset, cx);
-        }
-    }
-
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
-        cx.notify();
-    }
-
-    fn cursor_offset(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
-    }
-
-    fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
-            return 0;
-        };
-        if position.y < bounds.top() {
-            return 0;
-        }
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-        line.closest_index_for_x(position.x - bounds.left())
-    }
-
-    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
-        cx.notify();
-    }
-
-    fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(index, _)| (index < offset).then_some(index))
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(index, _)| (index > offset).then_some(index))
-            .unwrap_or(self.content.len())
-    }
-
-    fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        for (index, ch) in self.content.char_indices() {
-            if utf16_offset >= offset {
-                return index;
-            }
-            utf16_offset += ch.len_utf16();
-            if utf16_offset > offset {
-                return index + ch.len_utf8();
-            }
-        }
-        self.content.len()
-    }
-
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        self.content[..offset].chars().map(char::len_utf16).sum()
-    }
-
-    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
-    }
-
-    fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
-    }
-}
-
-impl EntityInputHandler for TargetInput {
-    fn text_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        actual_range: &mut Option<Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
-        actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_owned())
-    }
-
-    fn selected_text_range(
-        &mut self,
-        _: bool,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: self.selection_reversed,
-        })
-    }
-
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked_range
-            .as_ref()
-            .map(|range| self.range_to_utf16(range))
-    }
-
-    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
-        self.marked_range = None;
-    }
-
-    fn replace_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        if range.start > range.end
-            || range.end > self.content.len()
-            || !self.content.is_char_boundary(range.start)
-            || !self.content.is_char_boundary(range.end)
-        {
-            return;
-        }
-        let resulting_len = self
-            .content
-            .len()
-            .saturating_sub(range.end - range.start)
-            .saturating_add(new_text.len());
-        if resulting_len > MAX_TARGET_TEXT_BYTES {
-            return;
-        }
-        self.content.replace_range(range.clone(), new_text);
-        let offset = range.start + new_text.len();
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        cx.emit(TargetTextChanged);
-        cx.notify();
-    }
-
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        new_selected_range_utf16: Option<Range<usize>>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        if range.start > range.end
-            || range.end > self.content.len()
-            || !self.content.is_char_boundary(range.start)
-            || !self.content.is_char_boundary(range.end)
-        {
-            return;
-        }
-        let resulting_len = self
-            .content
-            .len()
-            .saturating_sub(range.end - range.start)
-            .saturating_add(new_text.len());
-        if resulting_len > MAX_TARGET_TEXT_BYTES {
-            return;
-        }
-        self.content.replace_range(range.clone(), new_text);
-        self.marked_range =
-            (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
-        self.selected_range =
-            marked_selection_range(range.start, new_text, new_selected_range_utf16.as_ref());
-        self.selection_reversed = false;
-        cx.emit(TargetTextChanged);
-        cx.notify();
-    }
-
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        bounds: Bounds<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<Bounds<Pixels>> {
-        let line = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
-        Some(Bounds::from_corners(
-            point(bounds.left() + line.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + line.x_for_index(range.end), bounds.bottom()),
-        ))
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        point: Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<usize> {
-        let bounds = self.last_bounds?;
-        let line = self.last_layout.as_ref()?;
-        Some(self.offset_to_utf16(line.closest_index_for_x(point.x - bounds.left())))
-    }
-}
-
-fn marked_selection_range(
-    insertion_start: usize,
-    text: &str,
-    selection_utf16: Option<&Range<usize>>,
-) -> Range<usize> {
-    let Some(selection) = selection_utf16 else {
-        let end = insertion_start + text.len();
-        return end..end;
-    };
-    let start = offset_from_utf16(text, selection.start);
-    let end = offset_from_utf16(text, selection.end).max(start);
-    insertion_start + start..insertion_start + end
-}
-
-fn offset_from_utf16(text: &str, offset: usize) -> usize {
-    let mut utf16_offset = 0;
-    for (index, ch) in text.char_indices() {
-        if offset <= utf16_offset {
-            return index;
-        }
-        let next_utf16_offset = utf16_offset + ch.len_utf16();
-        if offset < next_utf16_offset {
-            // A UTF-16 offset can land between the surrogate halves of a
-            // non-BMP scalar. GPUI's byte ranges cannot represent that
-            // position, so keep it at the scalar's leading byte.
-            return index;
-        }
-        utf16_offset = next_utf16_offset;
-    }
-    text.len()
-}
-
-impl Focusable for TargetInput {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-struct TargetTextElement {
-    input: Entity<TargetInput>,
-}
-
-struct TargetTextPrepaint {
-    line: Option<ShapedLine>,
-    cursor: Option<gpui::PaintQuad>,
-    selection: Option<gpui::PaintQuad>,
-}
-
-impl gpui::IntoElement for TargetTextElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for TargetTextElement {
-    type RequestLayoutState = ();
-    type PrepaintState = TargetTextPrepaint;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        let input = self.input.read(cx);
-        let style = window.text_style();
-        let text = input.content.clone();
-        let run = TextRun {
-            len: text.len(),
-            font: font("Ioskeley Mono"),
-            color: style.color,
-            background_color: None,
-            underline: input.marked_range.as_ref().map(|_| UnderlineStyle {
-                color: Some(style.color),
-                thickness: px(1.0),
-                wavy: false,
-            }),
-            strikethrough: None,
-        };
-        let line = window
-            .text_system()
-            .shape_line(text.into(), px(13.0), &[run], None);
-        let cursor_position = line.x_for_index(input.cursor_offset());
-        let (selection, cursor) = if input.selected_range.is_empty() {
-            (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_position, bounds.top()),
-                        size(px(1.0), bounds.size.height),
-                    ),
-                    rgba(0xd8d7d3ff),
-                )),
-            )
-        } else {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(input.selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(input.selected_range.end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    rgba(0xe9584340),
-                )),
-                None,
-            )
-        };
-        TargetTextPrepaint {
-            line: Some(line),
-            cursor,
-            selection,
-        }
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
-        }
-        let line = prepaint.line.take().expect("target text line");
-        let _ = line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        );
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
-        }
-        self.input.update(cx, |input, _| {
-            input.last_layout = Some(line);
-            input.last_bounds = Some(bounds);
-        });
-    }
-}
-
-impl Render for TargetInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-        div()
-            .key_context("TargetInput")
-            .track_focus(&self.focus_handle)
-            .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::home))
-            .on_action(cx.listener(Self::end))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::show_character_palette))
-            .on_action(cx.listener(Self::submit))
-            .on_action(cx.listener(Self::cancel))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, |_event, _window, _cx| {})
-            .flex()
-            .items_center()
-            .justify_center()
-            .size_full()
-            // Match Radiant's compact text-input content inset.
-            .px(px(8.0))
-            .child(TargetTextElement { input: cx.entity() })
-    }
-}
-
-/// GPUI retained view for the compact GainSnap editor.
 pub(crate) struct GainSnapEditor {
     controller: EditorController,
-    target_input: Entity<TargetInput>,
+    target_input: Entity<NumericInput>,
     #[allow(dead_code)]
     target_text_subscription: Subscription,
     #[allow(dead_code)]
     target_submit_subscription: Subscription,
     #[allow(dead_code)]
     target_cancel_subscription: Subscription,
+    #[allow(dead_code)]
+    target_step_subscription: Subscription,
     meter_focus_handle: FocusHandle,
     mode_focus_handle: FocusHandle,
     match_focus_handle: FocusHandle,
     normalize_focus_handle: FocusHandle,
     meter_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     target_dragging: bool,
+    target_drag_offset_y: f32,
     last_display_snapshot: DisplaySnapshot,
 }
 
 impl GainSnapEditor {
     fn new(controller: EditorController, cx: &mut Context<Self>) -> Self {
-        let target_input = cx.new(|cx| TargetInput::new(controller.target_text(), cx));
+        let target_style = NumericInputStyle {
+            font: font("Ioskeley Mono"),
+            text_size: 13.0,
+            line_height: 14.0,
+            text_color: solid(TEXT_PRIMARY).into(),
+            selection_color: rgba(0xe9584380),
+            cursor_color: solid(TEXT_PRIMARY),
+            text_align: gpui::TextAlign::Center,
+            horizontal_padding: 0.0,
+        };
+        let target_config = NumericInputConfig::new(
+            controller.target_db(),
+            NumericInputRange::new(TARGET_RANGE.min, TARGET_RANGE.max),
+            TARGET_KEYBOARD_STEP_DB,
+            TARGET_FINE_KEYBOARD_STEP_DB,
+            format_target_text,
+        )
+        .with_style(target_style);
+        let target_input = cx.new(move |cx| NumericInput::new(target_config, cx));
         let target_text_subscription =
-            cx.subscribe(&target_input, |view, input, _: &TargetTextChanged, cx| {
-                let text = input.read(cx).content().to_owned();
-                view.apply_target_text(text, false, cx);
+            cx.subscribe(&target_input, |view, _, event: &NumericInputChanged, cx| {
+                view.apply_target_text(event.text.clone(), false, cx);
             });
-        let target_submit_subscription =
-            cx.subscribe(&target_input, |view, input, _: &TargetTextSubmitted, cx| {
-                let text = input.read(cx).content().to_owned();
-                view.apply_target_text(text, true, cx);
-            });
-        let target_cancel_subscription =
-            cx.subscribe(&target_input, |view, input, _: &TargetTextCanceled, cx| {
+        let target_submit_subscription = cx.subscribe(
+            &target_input,
+            |view, _, event: &NumericInputSubmitted, cx| {
+                view.apply_target_text(event.text.clone(), true, cx);
+            },
+        );
+        let target_cancel_subscription = cx.subscribe(
+            &target_input,
+            |view, input, _: &NumericInputCanceled, cx| {
                 let text = view.controller.target_text();
-                input.update(cx, |input, cx| input.set_content(text, cx));
+                input.update(cx, |input, cx| input.set_text(text, cx));
+                cx.notify();
+            },
+        );
+        let target_step_subscription =
+            cx.subscribe(&target_input, |view, _, event: &NumericInputStepped, cx| {
+                let value = (view.controller.target_db() + event.delta)
+                    .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
+                view.controller.set_target_db(value);
+                view.set_target_text_force(view.controller.target_text(), cx);
                 cx.notify();
             });
         let last_display_snapshot =
@@ -1155,37 +506,43 @@ impl GainSnapEditor {
             target_text_subscription,
             target_submit_subscription,
             target_cancel_subscription,
+            target_step_subscription,
             meter_focus_handle: cx.focus_handle(),
             mode_focus_handle: cx.focus_handle(),
             match_focus_handle: cx.focus_handle(),
             normalize_focus_handle: cx.focus_handle(),
             meter_bounds: Rc::new(RefCell::new(None)),
             target_dragging: false,
+            target_drag_offset_y: 0.0,
             last_display_snapshot,
         }
     }
 
     fn apply_target_text(&mut self, text: String, submitted: bool, cx: &mut Context<Self>) {
-        if let Some(formatted) = self.controller.target_text_changed(&text, submitted) {
-            self.target_input
-                .update(cx, |input, cx| input.set_content(formatted, cx));
+        let formatted = self.controller.target_text_changed(&text, submitted);
+        let value = self.controller.target_db();
+        self.target_input
+            .update(cx, |input, cx| input.set_value(value, cx));
+        if let Some(formatted) = formatted {
+            self.set_target_text_force(formatted, cx);
         }
         cx.notify();
     }
 
     fn set_target_text(&mut self, text: String, cx: &mut Context<Self>) {
-        self.target_input
-            .update(cx, |input, cx| input.set_content(text, cx));
+        self.target_input.update(cx, |input, cx| {
+            input.set_value(self.controller.target_db(), cx);
+            if !input.is_editing() {
+                input.set_text(text, cx);
+            }
+        });
     }
 
-    fn handle_modifiers_changed(
-        &mut self,
-        event: &ModifiersChangedEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.controller.set_shift_held(event.modifiers.shift);
-        cx.notify();
+    fn set_target_text_force(&mut self, text: String, cx: &mut Context<Self>) {
+        self.target_input.update(cx, |input, cx| {
+            input.set_value(self.controller.target_db(), cx);
+            input.set_text(text, cx);
+        });
     }
 
     fn handle_key_down(
@@ -1211,9 +568,8 @@ impl GainSnapEditor {
             }
             return;
         }
-        let input_focused = self.target_input.read(cx).focus_handle().is_focused(window);
         let meter_focused = self.meter_focus_handle.is_focused(window);
-        if !(input_focused || meter_focused) {
+        if !meter_focused {
             return;
         }
         if event.keystroke.modifiers.control
@@ -1223,25 +579,19 @@ impl GainSnapEditor {
         {
             return;
         }
-        self.controller
-            .set_shift_held(event.keystroke.modifiers.shift);
-        let direction = if input_focused {
-            match event.keystroke.key.as_str() {
-                "up" => Some(TargetStepDirection::Up),
-                "down" => Some(TargetStepDirection::Down),
-                _ => None,
-            }
-        } else {
-            match event.keystroke.key.as_str() {
-                "up" | "right" => Some(TargetStepDirection::Up),
-                "down" | "left" => Some(TargetStepDirection::Down),
-                _ => None,
-            }
+        let direction = match event.keystroke.key.as_str() {
+            "up" | "right" => Some(TargetStepDirection::Up),
+            "down" | "left" => Some(TargetStepDirection::Down),
+            _ => None,
         };
         if let Some(direction) = direction {
-            if let Some(text) = self.controller.step_target(direction) {
-                self.set_target_text(text, cx);
-            }
+            let next = step_target_db(
+                self.controller.target_db(),
+                direction,
+                event.keystroke.modifiers.shift,
+            );
+            self.controller.set_target_db(next);
+            self.set_target_text_force(self.controller.target_text(), cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -1259,7 +609,7 @@ impl GainSnapEditor {
                 _ => None,
             };
             if let Some(text) = text {
-                self.set_target_text(text, cx);
+                self.set_target_text_force(text, cx);
                 cx.stop_propagation();
                 cx.notify();
             }
@@ -1273,11 +623,23 @@ impl GainSnapEditor {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.meter_focus_handle, cx);
-        self.target_dragging = true;
         let bounds = self.meter_bounds.borrow().as_ref().copied();
+        let arrow_hit = bounds
+            .map(|bounds| target_marker_hit(bounds, self.controller.target_db(), event.position))
+            .unwrap_or(false);
+        self.target_dragging = true;
         if let Some(bounds) = bounds {
-            self.controller
-                .set_target_from_position(bounds, event.position);
+            self.target_drag_offset_y = if arrow_hit {
+                target_marker_center_y(bounds, self.controller.target_db())
+                    .map(|center_y| f32::from(event.position.y) - center_y)
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            if !arrow_hit {
+                self.controller
+                    .set_target_from_position(bounds, event.position);
+            }
             self.set_target_text(self.controller.target_text(), cx);
         }
         cx.notify();
@@ -1289,8 +651,11 @@ impl GainSnapEditor {
         }
         let bounds = self.meter_bounds.borrow().as_ref().copied();
         if let Some(bounds) = bounds {
-            self.controller
-                .set_target_from_position(bounds, event.position);
+            let position = point(
+                event.position.x,
+                event.position.y - px(self.target_drag_offset_y),
+            );
+            self.controller.set_target_from_position(bounds, position);
             self.set_target_text(self.controller.target_text(), cx);
             cx.notify();
         }
@@ -1298,6 +663,7 @@ impl GainSnapEditor {
 
     fn meter_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
         self.target_dragging = false;
+        self.target_drag_offset_y = 0.0;
     }
 
     fn toggle_mode(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1379,14 +745,7 @@ impl Render for GainSnapEditor {
                         *meter_bounds.borrow_mut() = Some(bounds);
                     },
                     move |bounds, _, window, cx| {
-                        paint_meter(
-                            bounds,
-                            target_db,
-                            output_peak_db,
-                            target_focused || meter_focused,
-                            window,
-                            cx,
-                        );
+                        paint_meter(bounds, target_db, output_peak_db, meter_focused, window, cx);
                     },
                 )
                 .size_full(),
@@ -1401,7 +760,11 @@ impl Render for GainSnapEditor {
             .justify_center()
             .bg(solid(BG_PRIMARY))
             .border_1()
-            .border_color(solid(BORDER))
+            .border_color(if target_focused {
+                solid(ACCENT)
+            } else {
+                solid(BORDER)
+            })
             .text_color(solid(TEXT_PRIMARY))
             .font(font("Ioskeley Mono"))
             // Radiant's compact 28px text input uses a 13px mono face. Keep
@@ -1514,7 +877,6 @@ impl Render for GainSnapEditor {
             .line_height(px(14.0))
             .track_focus(&self.meter_focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
-            .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
             .child(target_control)
             .child(action_control)
     }
@@ -1635,6 +997,25 @@ fn target_marker_geometry(bounds: Bounds<Pixels>) -> Option<MarkerGeometry> {
         travel: (bottom_center_y - top_center_y).max(0.0),
         marker_height,
     })
+}
+
+fn target_marker_hit(bounds: Bounds<Pixels>, target_db: f32, position: Point<Pixels>) -> bool {
+    let Some(geometry) = target_marker_geometry(bounds) else {
+        return false;
+    };
+    let center_y = geometry.bottom_center_y - target_level_fraction(target_db) * geometry.travel;
+    let marker_left = f32::from(geometry.track.right()) + TARGET_MARKER_GAP;
+    let x = f32::from(position.x);
+    let y = f32::from(position.y);
+    x >= marker_left - 3.0
+        && x <= marker_left + TARGET_MARKER_WIDTH + 3.0
+        && y >= center_y - geometry.marker_height * 0.5 - 4.0
+        && y <= center_y + geometry.marker_height * 0.5 + 4.0
+}
+
+fn target_marker_center_y(bounds: Bounds<Pixels>, target_db: f32) -> Option<f32> {
+    let geometry = target_marker_geometry(bounds)?;
+    Some(geometry.bottom_center_y - target_level_fraction(target_db) * geometry.travel)
 }
 
 fn target_level_fraction(db: f32) -> f32 {
@@ -1773,7 +1154,14 @@ fn paint_meter(
     ));
     marker.close();
     if let Ok(marker) = marker.build() {
-        window.paint_path(marker, rgba(0xd8d7d3ff));
+        window.paint_path(
+            marker,
+            if focused {
+                rgba(0xe95843ff)
+            } else {
+                rgba(0xd8d7d3ff)
+            },
+        );
     }
     if focused {
         let mut emphasis = gpui::PathBuilder::stroke(px(1.0));
@@ -1895,7 +1283,6 @@ fn new_hosted_gui(
     toybox::gpui_gui::GpuiHostedGui::new(
         class_name,
         move |_window, cx| {
-            install_keybindings(cx);
             cx.new(|cx| GainSnapEditor::new(factory_controller.clone(), cx))
                 .into()
         },
@@ -1948,26 +1335,6 @@ mod tests {
             step_target_db(TARGET_MIN_DB, TargetStepDirection::Down, false),
             TARGET_MIN_DB
         );
-    }
-
-    #[test]
-    fn marked_ime_selection_is_relative_to_inserted_text() {
-        assert_eq!(marked_selection_range(7, "é😀a", Some(&(1..3))), 9..13);
-        assert_eq!(marked_selection_range(7, "é😀a", Some(&(3..3))), 13..13);
-        assert_eq!(marked_selection_range(4, "a", Some(&(0..99))), 4..5);
-        assert_eq!(marked_selection_range(4, "", Some(&(0..0))), 4..4);
-    }
-
-    #[test]
-    fn utf16_offsets_preserve_non_ascii_boundaries() {
-        let text = "é😀a";
-        assert_eq!(offset_from_utf16(text, 0), 0);
-        assert_eq!(offset_from_utf16(text, 1), 2);
-        assert_eq!(offset_from_utf16(text, 2), 2);
-        assert_eq!(offset_from_utf16(text, 3), 6);
-        assert_eq!(offset_from_utf16(text, 4), 7);
-        assert_eq!(offset_from_utf16(text, 5), 7);
-        assert_eq!(offset_from_utf16(text, 99), text.len());
     }
 
     #[test]

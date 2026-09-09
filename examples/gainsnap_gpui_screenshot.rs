@@ -367,6 +367,8 @@ mod macos {
 
         const COMMAND: u64 = 1_u64 << 20;
         const SHIFT: u64 = 1_u64 << 17;
+        const FUNCTION: u64 = 1_u64 << 23;
+        const NUMERIC_PAD: u64 = 1_u64 << 21;
 
         // With no focused GPUI control, Space remains available to the host.
         send_repeated_key(app, fixture.window, &gui, " ", 49, 0);
@@ -546,6 +548,55 @@ mod macos {
         assert!((params.target_db() + 11.9).abs() < 0.0001);
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.target_db() + 12.0).abs() < 0.0001);
+        // Native AppKit arrows can carry Function and NumericPad keyboard
+        // metadata. The selected meter marker must still receive its semantic
+        // whole and fine steps.
+        send_key(
+            app,
+            fixture.window,
+            &gui,
+            "\u{f700}",
+            126,
+            FUNCTION | NUMERIC_PAD,
+        );
+        assert_eq!(params.target_db(), -11.0, "Fn+Up steps the selected arrow");
+        send_key(
+            app,
+            fixture.window,
+            &gui,
+            "\u{f701}",
+            125,
+            FUNCTION | NUMERIC_PAD,
+        );
+        assert_eq!(
+            params.target_db(),
+            -12.0,
+            "Fn+Down steps the selected arrow"
+        );
+        send_key(
+            app,
+            fixture.window,
+            &gui,
+            "\u{f700}",
+            126,
+            FUNCTION | NUMERIC_PAD | SHIFT,
+        );
+        assert!(
+            (params.target_db() + 11.9).abs() < 0.0001,
+            "Fn+Shift+Up fine-steps the selected arrow"
+        );
+        send_key(
+            app,
+            fixture.window,
+            &gui,
+            "\u{f701}",
+            125,
+            FUNCTION | NUMERIC_PAD | SHIFT,
+        );
+        assert!(
+            (params.target_db() + 12.0).abs() < 0.0001,
+            "Fn+Shift+Down fine-steps the selected arrow"
+        );
         send_key(app, fixture.window, &gui, "5", 23, 0);
         assert!(
             (params.target_db() + 12.0).abs() < 0.0001,

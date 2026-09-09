@@ -575,10 +575,13 @@ impl GainSnapEditor {
         if event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform
-            || event.keystroke.modifiers.function
         {
             return;
         }
+        // Native AppKit arrow events can carry the Function modifier as
+        // keyboard metadata. It does not change the meaning of a semantic
+        // arrow key, so keep it available for the selected meter marker. This
+        // mirrors the numeric field's arrow-step handling.
         let direction = match event.keystroke.key.as_str() {
             "up" | "right" => Some(TargetStepDirection::Up),
             "down" | "left" => Some(TargetStepDirection::Down),
@@ -594,6 +597,11 @@ impl GainSnapEditor {
             self.set_target_text_force(self.controller.target_text(), cx);
             cx.stop_propagation();
             cx.notify();
+            return;
+        }
+        // Keep function-modified non-arrow keys available to the host. Native
+        // AppKit arrow metadata is the only Function case this control owns.
+        if event.keystroke.modifiers.function {
             return;
         }
         if meter_focused {

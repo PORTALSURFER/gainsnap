@@ -632,23 +632,11 @@ impl GainSnapEditor {
     ) {
         window.focus(&self.meter_focus_handle, cx);
         let bounds = self.meter_bounds.borrow().as_ref().copied();
-        let arrow_hit = bounds
-            .map(|bounds| target_marker_hit(bounds, self.controller.target_db(), event.position))
-            .unwrap_or(false);
         self.target_dragging = true;
         if let Some(bounds) = bounds {
-            self.target_drag_offset_y = if arrow_hit {
-                target_marker_center_y(bounds, self.controller.target_db())
-                    .map(|center_y| f32::from(event.position.y) - center_y)
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            if !arrow_hit {
-                self.controller
-                    .set_target_from_position(bounds, event.position);
-            }
-            self.set_target_text(self.controller.target_text(), cx);
+            self.target_drag_offset_y = target_marker_center_y(bounds, self.controller.target_db())
+                .map(|center_y| f32::from(event.position.y) - center_y)
+                .unwrap_or(0.0);
         }
         cx.notify();
     }
@@ -1005,20 +993,6 @@ fn target_marker_geometry(bounds: Bounds<Pixels>) -> Option<MarkerGeometry> {
         travel: (bottom_center_y - top_center_y).max(0.0),
         marker_height,
     })
-}
-
-fn target_marker_hit(bounds: Bounds<Pixels>, target_db: f32, position: Point<Pixels>) -> bool {
-    let Some(geometry) = target_marker_geometry(bounds) else {
-        return false;
-    };
-    let center_y = geometry.bottom_center_y - target_level_fraction(target_db) * geometry.travel;
-    let marker_left = f32::from(geometry.track.right()) + TARGET_MARKER_GAP;
-    let x = f32::from(position.x);
-    let y = f32::from(position.y);
-    x >= marker_left - 3.0
-        && x <= marker_left + TARGET_MARKER_WIDTH + 3.0
-        && y >= center_y - geometry.marker_height * 0.5 - 4.0
-        && y <= center_y + geometry.marker_height * 0.5 + 4.0
 }
 
 fn target_marker_center_y(bounds: Bounds<Pixels>, target_db: f32) -> Option<f32> {

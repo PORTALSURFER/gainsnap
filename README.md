@@ -21,13 +21,20 @@ wave as 0 dBFS RMS; a full-scale sine reads about -3.01 dBFS RMS. The mode is
 saved with the project and can be automated in CLAP and VST3.
 
 RMS matching observes the first 300 ms using conservative peak correction,
-then holds the strongest complete window from the current measurement instead
-of boosting decaying tails, gaps, or quieter passages. Silence after an observed
-hit still completes that hit's window; after two seconds of silence, returning
-audio gets a fresh protected startup. Restart Match to measure a quieter passage
-afresh. RMS permits peaks above its average target, but requested gain is bounded
-by the headroom of the largest observed sample peak; the existing 0 dBFS
-sample-peak guard remains active as a safety net.
+then follows the strongest complete window in roughly the most recent three
+seconds. Peak and RMS evidence age out together, allowing Match to settle toward
+a sustained upstream level change while the stability check helps avoid chasing
+decaying tails and short gaps.
+A lower rolling estimate is published only after recent usable evidence remains
+within 0.5 dB for about 300 ms; newly louder evidence updates promptly. Silence
+after an observed hit still completes that hit's window, and after two seconds of
+silence, returning audio gets a fresh protected startup. RMS permits peaks above
+its average target, but requested gain is bounded by the headroom of the largest
+recent sample peak; the existing 0 dBFS sample-peak guard remains active as a
+safety net.
+For continuous matching in either mode, leave Match enabled while changing the
+upstream sound and allow roughly 3–4 seconds of steady material for the recent
+history and settling check to respond.
 Targets that would require clipping or more than ±24 dB correction cannot be
 reached; the meter always shows the actual protected output. Normalize switches
 to PEAK, sets 0 dBFS, and starts Match.
@@ -57,11 +64,11 @@ The default editor is 208 × 212 logical pixels, with aligned action buttons and
 tighter spacing. Match and the status dot pulse together while Match is enabled,
 including when playback is silent. Native macOS and Windows editors share this
 surface, including host keyboard input, focus, and DPI-aware resizing.
-After the gain settles, the measured peak reaches the target when the required
-correction is within the supported ±24 dB range. Quieter passages read below the
-target; while matching, the peak guard contains newly encountered louder peaks
-as the gain settles. The guard limits sample peaks, rather than reconstructed
-intersample peaks.
+After the gain settles, the selected measured level reaches the target when the
+required correction is within the supported ±24 dB range. Quieter passages read
+below the target; while matching, the peak guard contains newly encountered
+louder peaks as the gain settles. The guard limits sample peaks, rather than
+reconstructed intersample peaks.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 

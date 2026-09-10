@@ -22,13 +22,17 @@ status dot share a pulse while Match is enabled. Both macOS and Windows use
 Toybox's embedded GPUI host, including keyboard, focus, and DPI conversion.
 
 The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). RMS uses the strongest
-complete 300 ms sliding mean-square window, with the louder channel setting the
-shared gain. It initially uses peak correction until a complete window exists;
-zeroes after a hit remain part of that window. Later gaps and quieter passages
-do not raise gain, while newly stronger complete windows may update it. Restart
-Match to measure a quieter passage afresh. After two seconds of silence,
+complete 300 ms sliding mean-square window in roughly the most recent three
+seconds, with the louder channel setting the shared gain. It initially uses peak
+correction until a complete window exists; zeroes after a hit remain part of that
+window. Peak and RMS evidence age out together. A lower rolling estimate is
+published only after recent usable evidence stays within 0.5 dB for about 300 ms,
+while newly louder evidence may update promptly. For either mode, a user who
+leaves Match enabled while changing the upstream sound should allow roughly 3–4
+seconds of steady material for the recent history and settling check to respond.
+After two seconds of silence,
 returning audio restarts the protected fade. Requested RMS gain is bounded by the
-largest observed sample peak's 0 dBFS headroom; the sample peak guard remains the
+largest recent sample peak's 0 dBFS headroom; the sample peak guard remains the
 final safety net. The output meter shows the latest 300 ms sliding RMS window,
 using the same full-scale-square = 0 dBFS convention. Normalize explicitly
 selects Peak before setting 0 dBFS and engaging Match.

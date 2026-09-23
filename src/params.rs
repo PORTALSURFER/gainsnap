@@ -141,6 +141,7 @@ pub struct GainSnapParams {
     rms_mode: AtomicU32,
     locked_gain_db: AtomicF32,
     restart_generation: AtomicU32,
+    has_match_result: AtomicU32,
 }
 
 impl Default for GainSnapParams {
@@ -158,6 +159,7 @@ impl GainSnapParams {
             rms_mode: AtomicU32::new(0),
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
             restart_generation: AtomicU32::new(0),
+            has_match_result: AtomicU32::new(0),
         }
     }
 
@@ -190,6 +192,17 @@ impl GainSnapParams {
     /// Read the generation of the most recent transient restart request.
     pub fn restart_generation(&self) -> u32 {
         self.restart_generation.load(Ordering::Relaxed)
+    }
+
+    /// Whether a completed match has armed the low-cost held-level monitor.
+    pub fn has_match_result(&self) -> bool {
+        self.has_match_result.load(Ordering::Relaxed) != 0
+    }
+
+    /// Preserve completed-match identity across audio runtime recreation.
+    pub fn set_has_match_result(&self, has_result: bool) {
+        self.has_match_result
+            .store(u32::from(has_result), Ordering::Relaxed);
     }
 
     /// Apply a canonical plain parameter value from a host or editor.

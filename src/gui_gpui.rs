@@ -24,7 +24,7 @@ use toybox::gpui_gui::{
 
 use crate::clap_plugin::HostParamRequester;
 use crate::params::{PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
-use crate::status::{GuiStatus, MatchState};
+use crate::status::{GuiStatus, MatchActivity, MatchState};
 
 /// Preferred logical editor width for the compact toggle control surface.
 pub const WINDOW_WIDTH: u32 = 208;
@@ -49,8 +49,15 @@ const ACTION_CONTROL_HEIGHT: f32 =
     TARGET_METER_HEIGHT + TARGET_CONTROL_SPACING + TARGET_ENTRY_HEIGHT;
 const MATCHING_CONTROL_HEIGHT: f32 = 92.0;
 const MATCH_BUTTON_HEIGHT: f32 = 32.0;
+const MATCH_ROW_GAP: f32 = 4.0;
+const MATCH_BUTTON_WIDTH: f32 = 60.0;
+const RESTART_BUTTON_WIDTH: f32 = ACTION_CONTROL_WIDTH - MATCH_BUTTON_WIDTH - MATCH_ROW_GAP;
 const NORMALIZE_BUTTON_HEIGHT: f32 = 24.0;
-const STATUS_INDICATOR_SIZE: f32 = 12.0;
+const ACTIVITY_RAIL_HEIGHT: f32 = 6.0;
+const ACTIVITY_RAIL_GAP: f32 = 3.0;
+const ACTIVITY_SEGMENT_HEIGHT: f32 = 4.0;
+const ACTIVITY_LABEL_HEIGHT: f32 = 14.0;
+const ACTIVITY_LABEL_GAP: f32 = 4.0;
 const TARGET_METER_TRACK_WIDTH: f32 = 14.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
 const TARGET_METER_TICK_COUNT: usize = 13;
@@ -84,6 +91,7 @@ const SURFACE_COLUMN_GAP: f32 = 12.0;
 const MATCH_PULSE_SECONDS: f32 = 1.2;
 const TARGET_ENTRY_AUTOMATION_LABEL: &str = "Target level, dBFS";
 const NORMALIZE_AUTOMATION_DESCRIPTION: &str = "Peak normalize to 0 dBFS and start Match";
+const RESTART_AUTOMATION_DESCRIPTION: &str = "Restart matching measurement";
 
 // The original GainSnap dark theme values are part of the compact visual
 // contract preserved by the GPUI editor.
@@ -94,7 +102,6 @@ const ACCENT: u32 = 0xe95843;
 const ACCENT_DANGER: u32 = 0xef4c3d;
 const TEXT_PRIMARY: u32 = 0xd8d7d3;
 const TEXT_MUTED: u32 = 0x999b9a;
-const HIGHLIGHT_CYAN: u32 = 0xaeb0ad;
 
 fn solid(value: u32) -> gpui::Rgba {
     rgba((value << 8) | 0xff)
@@ -217,6 +224,7 @@ struct DisplaySnapshot {
     rms_mode: bool,
     output_peak_db: u32,
     state: MatchState,
+    activity: MatchActivity,
 }
 
 impl DisplaySnapshot {
@@ -232,6 +240,7 @@ impl DisplaySnapshot {
             output_peak_db: sanitize_meter_level_db(status.output_level_db(params.rms_mode()))
                 .to_bits(),
             state: status.state(),
+            activity: status.activity(),
         }
     }
 }
@@ -339,6 +348,12 @@ impl EditorController {
         self.end(id);
     }
 
+    fn restart_matching(&self) {
+        if self.params.match_requested() {
+            self.params.request_restart();
+        }
+    }
+
     fn sync_target_text(&mut self, target_db: f32) -> Option<String> {
         if (target_db - self.target_text_param).abs() > TARGET_TEXT_SYNC_EPSILON {
             self.target_text_param = target_db;
@@ -388,6 +403,7 @@ impl EditorController {
         self.toggle_value(PARAM_RMS_MODE, false);
         self.set_target_db(TARGET_MAX_DB);
         self.toggle_value(PARAM_MATCH, true);
+        self.restart_matching();
         format_target_text(self.target_text_param)
     }
 
@@ -409,7 +425,13 @@ impl EditorController {
     }
 
     fn advance_pulse_at(&mut self, now: Instant) -> bool {
-        let next = if self.params.match_requested() {
+        let activity = self.status.activity();
+        let should_pulse = self.params.match_requested()
+            && matches!(
+                activity,
+                MatchActivity::Listening | MatchActivity::Adjusting
+            );
+        let next = if should_pulse {
             let start = *self.pulse_started.get_or_insert(now);
             let phase = now.saturating_duration_since(start).as_secs_f32() / MATCH_PULSE_SECONDS
                 * std::f32::consts::TAU;
@@ -444,6 +466,7 @@ pub(crate) struct GainSnapEditor {
     meter_focus_handle: FocusHandle,
     mode_focus_handle: FocusHandle,
     match_focus_handle: FocusHandle,
+    restart_focus_handle: FocusHandle,
     normalize_focus_handle: FocusHandle,
     meter_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     target_dragging: bool,
@@ -510,6 +533,7 @@ impl GainSnapEditor {
             meter_focus_handle: cx.focus_handle(),
             mode_focus_handle: cx.focus_handle(),
             match_focus_handle: cx.focus_handle(),
+            restart_focus_handle: cx.focus_handle(),
             normalize_focus_handle: cx.focus_handle(),
             meter_bounds: Rc::new(RefCell::new(None)),
             target_dragging: false,
@@ -553,6 +577,7 @@ impl GainSnapEditor {
     ) {
         let button_focused = self.mode_focus_handle.is_focused(window)
             || self.match_focus_handle.is_focused(window)
+            || self.restart_focus_handle.is_focused(window)
             || self.normalize_focus_handle.is_focused(window);
         if button_focused {
             // GPUI's interactive button turns a clean Space or Enter
@@ -674,6 +699,11 @@ impl GainSnapEditor {
         cx.notify();
     }
 
+    fn restart_matching(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.controller.restart_matching();
+        cx.notify();
+    }
+
     fn normalize(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         let text = self.controller.normalize();
         self.set_target_text(text, cx);
@@ -722,7 +752,7 @@ impl Render for GainSnapEditor {
         let mode_rms = self.controller.params.rms_mode();
         let match_requested = self.controller.params.match_requested();
         let pulse_alpha = self.controller.pulse_alpha;
-        let match_state = self.controller.status.state();
+        let match_activity = self.controller.status.activity();
         let target_input = self.target_input.clone();
 
         let meter = div()
@@ -785,8 +815,8 @@ impl Render for GainSnapEditor {
             // Radiant's mode toggle uses the subtle control chrome for both
             // choices; its label changes without becoming a filled action.
             false,
-            ACTION_CONTROL_WIDTH,
-            24.0,
+            true,
+            (ACTION_CONTROL_WIDTH, 24.0),
             &self.mode_focus_handle,
             cx.listener(Self::toggle_mode),
         );
@@ -794,14 +824,24 @@ impl Render for GainSnapEditor {
             "match-now",
             "MATCH",
             match_requested,
-            ACTION_CONTROL_WIDTH,
-            MATCH_BUTTON_HEIGHT,
+            true,
+            (MATCH_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT),
             &self.match_focus_handle,
             cx.listener(Self::toggle_match),
         )
         .when(match_requested, |element| {
             element.bg(rgba(ACCENT << 8 | u32::from(pulse_alpha)))
         });
+        let restart = button_element(
+            "restart-match",
+            "↻",
+            false,
+            match_requested,
+            (RESTART_BUTTON_WIDTH, MATCH_BUTTON_HEIGHT),
+            &self.restart_focus_handle,
+            cx.listener(Self::restart_matching),
+        )
+        .aria_label(RESTART_AUTOMATION_DESCRIPTION);
         let normalize = div()
             .id("normalize")
             .w(px(ACTION_CONTROL_WIDTH))
@@ -833,17 +873,63 @@ impl Render for GainSnapEditor {
             .w(px(ACTION_CONTROL_WIDTH))
             .h(px(MATCHING_CONTROL_HEIGHT))
             .gap(px(6.0))
-            .children([mode, match_button, normalize]);
+            .child(mode)
+            .child(
+                div()
+                    .flex()
+                    .gap(px(MATCH_ROW_GAP))
+                    .w(px(ACTION_CONTROL_WIDTH))
+                    .h(px(MATCH_BUTTON_HEIGHT))
+                    .children([match_button, restart]),
+            )
+            .child(normalize);
 
-        let dot_color = match_status_color(match_state, match_requested, pulse_alpha);
-        let status_dot = div()
-            .id("status-indicator")
-            .w(px(STATUS_INDICATOR_SIZE))
-            .h(px(STATUS_INDICATOR_SIZE))
+        let active_stage = activity_stage(match_activity);
+        let segment_width =
+            (ACTION_CONTROL_WIDTH - ACTIVITY_RAIL_GAP * 2.0) / ACTIVITY_SEGMENT_COUNT as f32;
+        let mut activity_rail = div()
+            .id("activity-rail")
+            .w(px(ACTION_CONTROL_WIDTH))
+            .h(px(ACTIVITY_RAIL_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(ACTIVITY_RAIL_GAP));
+        for index in 0..ACTIVITY_SEGMENT_COUNT {
+            let active = active_stage == Some(index);
+            let color = if active {
+                rgba(ACCENT << 8 | u32::from(pulse_alpha))
+            } else {
+                solid(BORDER_EMPHASIS)
+            };
+            activity_rail = activity_rail.child(
+                div()
+                    .w(px(segment_width))
+                    .h(px(ACTIVITY_SEGMENT_HEIGHT))
+                    .bg(color),
+            );
+        }
+        let activity_label = div()
+            .id("activity-label")
+            .w(px(ACTION_CONTROL_WIDTH))
+            .h(px(ACTIVITY_LABEL_HEIGHT))
             .flex()
             .items_center()
             .justify_center()
-            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(dot_color));
+            .text_color(activity_label_color(match_activity))
+            .font(font("Ioskeley Mono"))
+            .text_size(px(11.0))
+            .line_height(px(12.0))
+            .child(activity_label_text(match_activity));
+        let activity_status = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .w(px(ACTION_CONTROL_WIDTH))
+            .h(px(ACTIVITY_RAIL_HEIGHT
+                + ACTIVITY_LABEL_GAP
+                + ACTIVITY_LABEL_HEIGHT))
+            .gap(px(ACTIVITY_LABEL_GAP))
+            .children([activity_rail, activity_label]);
 
         let action_control = div()
             .flex()
@@ -852,9 +938,9 @@ impl Render for GainSnapEditor {
             .justify_center()
             .w(px(ACTION_CONTROL_WIDTH))
             .h(px(ACTION_CONTROL_HEIGHT))
-            .gap(px(10.0))
+            .gap(px(8.0))
             .child(matching)
-            .child(status_dot);
+            .child(activity_status);
 
         div()
             .id("gainsnap-editor")
@@ -898,8 +984,8 @@ fn button_element(
     id: &'static str,
     label: &'static str,
     active: bool,
-    width: f32,
-    height: f32,
+    enabled: bool,
+    size: (f32, f32),
     focus_handle: &FocusHandle,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
@@ -919,16 +1005,30 @@ fn button_element(
             }),
         )
     };
+    let foreground = if enabled {
+        foreground
+    } else {
+        solid(TEXT_MUTED)
+    };
+    let border = if enabled {
+        if active {
+            solid(ACCENT)
+        } else {
+            solid(BORDER)
+        }
+    } else {
+        solid(BORDER)
+    };
     div()
         .id(id)
-        .w(px(width))
-        .h(px(height))
+        .w(px(size.0))
+        .h(px(size.1))
         .flex()
         .items_center()
         .justify_start()
         .px(px(8.0))
         .border_1()
-        .border_color(if active { solid(ACCENT) } else { solid(BORDER) })
+        .border_color(border)
         .bg(background)
         .text_color(foreground)
         .font(font("Ioskeley Mono"))
@@ -937,21 +1037,48 @@ fn button_element(
         .role(gpui::Role::Button)
         .track_focus(focus_handle)
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            window.focus(&focus_handle_for_mouse, cx);
+            if enabled {
+                window.focus(&focus_handle_for_mouse, cx);
+            }
         })
-        .on_click(listener)
+        .on_click(move |event, window, cx| {
+            if enabled {
+                listener(event, window, cx);
+            }
+        })
+        .when(!enabled, |element| element.opacity(0.45))
         .child(label)
 }
 
-fn match_status_color(state: MatchState, active: bool, pulse_alpha: u8) -> gpui::Rgba {
-    if active {
-        return rgba(ACCENT << 8 | u32::from(pulse_alpha));
+const ACTIVITY_SEGMENT_COUNT: usize = 3;
+
+fn activity_stage(activity: MatchActivity) -> Option<usize> {
+    match activity {
+        MatchActivity::Listening => Some(0),
+        MatchActivity::Adjusting => Some(1),
+        MatchActivity::Matched => Some(2),
+        MatchActivity::Ready | MatchActivity::NoSignal | MatchActivity::Held => None,
     }
-    match state {
-        MatchState::Ready => solid(BORDER_EMPHASIS),
-        MatchState::Measuring => solid(ACCENT),
-        MatchState::Locked => solid(HIGHLIGHT_CYAN),
-        MatchState::NoSignal => solid(ACCENT_DANGER),
+}
+
+fn activity_label_text(activity: MatchActivity) -> &'static str {
+    match activity {
+        MatchActivity::Ready => "Ready",
+        MatchActivity::NoSignal => "No signal",
+        MatchActivity::Held => "Held",
+        MatchActivity::Listening => "Listening",
+        MatchActivity::Adjusting => "Adjusting",
+        MatchActivity::Matched => "Matched",
+    }
+}
+
+fn activity_label_color(activity: MatchActivity) -> gpui::Rgba {
+    match activity {
+        MatchActivity::NoSignal => solid(ACCENT_DANGER),
+        MatchActivity::Ready | MatchActivity::Held => solid(TEXT_MUTED),
+        MatchActivity::Listening | MatchActivity::Adjusting | MatchActivity::Matched => {
+            solid(TEXT_PRIMARY)
+        }
     }
 }
 
@@ -1352,5 +1479,24 @@ mod tests {
         assert!(!params.rms_mode());
         assert_eq!(params.target_db(), TARGET_MAX_DB);
         assert!(params.match_requested());
+    }
+
+    #[test]
+    fn restart_control_requests_a_new_session_only_while_matching() {
+        let params = Arc::new(crate::params::GainSnapParams::new());
+        let controller = EditorController::new(
+            Arc::clone(&params),
+            Arc::new(AutomationQueue::default()),
+            Arc::new(GuiStatus::default()),
+            None,
+            None,
+        );
+
+        controller.restart_matching();
+        assert_eq!(params.restart_generation(), 0);
+
+        params.set_param(PARAM_MATCH, 1.0);
+        controller.restart_matching();
+        assert_eq!(params.restart_generation(), 1);
     }
 }

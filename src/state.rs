@@ -132,4 +132,18 @@ mod tests {
         assert!(!decoded.match_requested);
         assert_eq!(decoded.locked_gain_db, 5.25);
     }
+
+    #[test]
+    fn high_peak_gain_round_trips_without_changing_state_format() {
+        let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 32.0);
+        let payload = encode_payload(&params);
+
+        let decoded = decode_payload(STATE_VERSION, &payload).expect("valid high-gain state");
+        assert_eq!(decoded.locked_gain_db, 32.0);
+
+        let restored = GainSnapParams::new();
+        apply_snapshot(&restored, decoded);
+        assert_eq!(restored.locked_gain_db(), 32.0);
+    }
 }

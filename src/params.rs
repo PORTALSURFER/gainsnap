@@ -25,8 +25,11 @@ pub const TARGET_MAX_DB: f32 = 0.0;
 pub const DEFAULT_TARGET_DB: f32 = -12.0;
 /// Lowest gain correction GainSnap can apply.
 pub const GAIN_MIN_DB: f32 = -24.0;
-/// Highest gain correction GainSnap can apply.
-pub const GAIN_MAX_DB: f32 = 24.0;
+/// Highest peak-mode gain correction GainSnap can apply.
+///
+/// Inputs at or below the -120 dBFS silence floor are not measured, so this
+/// finite bound covers every usable peak while keeping the stored gain finite.
+pub const GAIN_MAX_DB: f32 = 120.0;
 /// Default applied gain before the first successful match.
 pub const DEFAULT_LOCKED_GAIN_DB: f32 = 0.0;
 
@@ -137,6 +140,7 @@ pub struct GainSnapParams {
     match_request: AtomicU32,
     rms_mode: AtomicU32,
     locked_gain_db: AtomicF32,
+    restart_generation: AtomicU32,
 }
 
 impl Default for GainSnapParams {
@@ -153,6 +157,7 @@ impl GainSnapParams {
             match_request: AtomicU32::new(0),
             rms_mode: AtomicU32::new(0),
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
+            restart_generation: AtomicU32::new(0),
         }
     }
 
@@ -174,6 +179,17 @@ impl GainSnapParams {
     /// Read the last calculated gain correction in decibels.
     pub fn locked_gain_db(&self) -> f32 {
         sanitize_gain(self.locked_gain_db.load(Ordering::Relaxed))
+    }
+
+    /// Request a fresh measurement session without adding a host-visible
+    /// parameter or changing the saved plug-in state.
+    pub fn request_restart(&self) {
+        self.restart_generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read the generation of the most recent transient restart request.
+    pub fn restart_generation(&self) -> u32 {
+        self.restart_generation.load(Ordering::Relaxed)
     }
 
     /// Apply a canonical plain parameter value from a host or editor.
@@ -342,7 +358,10 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
             short_title: "Gain",
             units: "dB",
             step_count: 0,
-            default_normalized: 0.5,
+            default_normalized: normalized_from_plain_value(
+                PARAM_LOCKED_GAIN_DB,
+                DEFAULT_LOCKED_GAIN_DB as f64,
+            )?,
             automatable: false,
         }),
         3 => Some(Vst3ParamInfo {
@@ -413,6 +432,12 @@ mod tests {
         #[cfg(feature = "vst3")]
         {
             assert_eq!(vst3_param_info_for_index(3).unwrap().step_count, 1);
+            let gain_info = vst3_param_info_for_index(2).unwrap();
+            assert!((gain_info.default_normalized - 1.0 / 6.0).abs() < 1.0e-12);
+            assert_eq!(
+                gain_info.default_normalized,
+                normalized_from_plain_value(PARAM_LOCKED_GAIN_DB, 0.0).unwrap()
+            );
             assert_eq!(
                 format_value_text(PARAM_RMS_MODE, 1.0).as_deref(),
                 Some("RMS")

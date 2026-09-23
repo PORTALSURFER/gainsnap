@@ -4,38 +4,50 @@
 
 While Match is enabled, GainSnap measures an incoming track peak and continuously
 applies the gain needed to reach a chosen target. Disabling Match holds that
-gain. Normalize sets the target to 0 dBFS and
+gain until a louder input would exceed the target, then lowers it. Normalize
+sets the target to 0 dBFS and
 starts Match in one click. The vertical meter shows a smoothed output peak
 in realtime as one thick orange column, with a small dB scale at its left edge.
 A small triangle beside the meter marks the target and acts as the target
 control.
 
+Closing or minimizing the editor disables continuous Match. The audio processor
+holds the gain and monitors for output above the target, lowering the gain when
+needed. This uses the existing audio callback without a background task.
+
 Match fades playing audio down over 10 ms before a 300 ms fade up. Silent
 starts wait for usable signal. Restarts preserve the currently audible gain. Gain increases
 use a slower 100 ms response than the 10 ms reductions. A stereo-linked sample
 peak guard retains the previous ceiling during the outgoing fade, then caps
-Peak-mode matching output at the target and held output at 0 dBFS, with immediate attack and 100 ms recovery. The fade continues if Match
+Peak-mode matching and held output at the target, with immediate attack and 100 ms recovery. The fade continues if Match
 is disabled early. Output metering includes this protection.
 The startup fade follows the peak guard, bounding strong bursts throughout the
-fade. The 208 × 212 editor groups its controls tightly; the Match button and
-status dot share a pulse while Match is enabled. Both macOS and Windows use
+fade. The 208 × 212 editor groups its controls tightly; a three-stage activity
+rail reports Listening, Adjusting, or Matched below Normalize, with Ready, Held,
+and No signal shown outside those active stages. A short correction telemetry
+hold keeps Adjusting visible for about 200 ms. Both macOS and Windows use
 Toybox's embedded GPUI host, including keyboard, focus, and DPI conversion.
 
-The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). RMS uses the strongest
-complete 300 ms sliding mean-square window in roughly the most recent three
-seconds, with the louder channel setting the shared gain. It initially uses peak
-correction until a complete window exists; zeroes after a hit remain part of that
-window. Peak and RMS evidence age out together. A lower rolling estimate is
-published only after recent usable evidence stays within 0.5 dB for about 300 ms,
-while newly louder evidence may update promptly. For either mode, a user who
-leaves Match enabled while changing the upstream sound should allow roughly 3–4
-seconds of steady material for the recent history and settling check to respond.
+The PEAK/RMS button is parameter 4 (0 = Peak, 1 = RMS). Peak mode remembers the
+highest finite stereo-linked sample peak for the current Match session. A quieter
+passage cannot raise the gain; a newly louder peak lowers it. Pressing Restart
+beside Match clears that session maximum while leaving Match enabled. RMS uses
+the strongest complete 300 ms sliding mean-square window in roughly the most
+recent three seconds, with the louder channel setting the shared gain. It
+initially uses peak correction until a complete window exists; zeroes after a
+hit remain part of that window. RMS evidence ages out, and a lower rolling
+estimate is published only after recent usable evidence stays within 0.5 dB for
+about 300 ms, while newly louder evidence may update promptly. RMS may take
+roughly 3–4 seconds of steady material to respond to an upstream level change.
 After two seconds of silence,
 returning audio restarts the protected fade. Requested RMS gain is bounded by the
 largest recent sample peak's 0 dBFS headroom; the sample peak guard remains the
 final safety net. The output meter shows the latest 300 ms sliding RMS window,
 using the same full-scale-square = 0 dBFS convention. Normalize explicitly
 selects Peak before setting 0 dBFS and engaging Match.
+Peak correction supports up to +120 dB for usable signals above the -120 dBFS
+silence floor; RMS correction retains its +24 dB boost cap. The fixed -24 dB
+attenuation limit and the existing sample-peak guard still apply.
 
 State version 3 stores mode in previously reserved payload byte 5. Version 1
 and 2 projects load in Peak mode, preserving the existing Match migration rules.

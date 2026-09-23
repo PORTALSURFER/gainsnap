@@ -518,12 +518,13 @@ impl IAudioProcessorTrait for GainSnapVst3Processor {
         apply_remaining_events(runtime, &self.shared.params);
         let report = runtime.engine.report();
         self.shared.status.update_rms(report.output_rms_db);
-        self.shared.status.update(
+        self.shared.status.update_with_activity(
             report.input_peak_db,
             report.output_peak_db,
             report.locked_gain_db,
             report.progress,
             report.state,
+            report.activity,
         );
         // The matcher preserves the host's silence annotation for a fully
         // silent block and clears it whenever audio is present.

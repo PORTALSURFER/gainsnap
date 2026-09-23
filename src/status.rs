@@ -2,7 +2,10 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Status reported while GainSnap is measuring or holding a gain value.
+use crate::params::{GAIN_MAX_DB, GAIN_MIN_DB};
+
+/// Lifecycle status reported while GainSnap is measuring or holding a gain
+/// value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum MatchState {
@@ -14,6 +17,55 @@ pub enum MatchState {
     Locked = 2,
     /// Match was disabled without a usable finite signal being measured.
     NoSignal = 3,
+}
+
+/// Informational activity reported by the live matcher.
+///
+/// This is intentionally separate from [`MatchState`]. MatchState describes
+/// the enabled/disabled lifecycle, while activity describes what the audio
+/// engine is doing during a continuous Match pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum MatchActivity {
+    /// Match is disabled before a measurement has been held.
+    Ready = 0,
+    /// No usable finite signal is currently available.
+    NoSignal = 1,
+    /// Match is disabled and the last calculated gain is being held.
+    Held = 2,
+    /// Match is enabled and waiting for usable measurement evidence.
+    Listening = 3,
+    /// Match is applying or waiting for a gain correction to settle.
+    Adjusting = 4,
+    /// Match is enabled and the correction has settled.
+    Matched = 5,
+}
+
+impl MatchActivity {
+    /// Map the lifecycle state to the safe activity fallback used by legacy
+    /// status publishers that do not yet provide live telemetry.
+    #[allow(dead_code)]
+    pub const fn from_match_state(state: MatchState) -> Self {
+        match state {
+            MatchState::Ready => Self::Ready,
+            MatchState::Measuring => Self::Listening,
+            MatchState::Locked => Self::Held,
+            MatchState::NoSignal => Self::NoSignal,
+        }
+    }
+
+    /// Decode the compact atomic representation, defaulting safely to Ready.
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
+    pub fn from_raw(value: u32) -> Self {
+        match value {
+            1 => Self::NoSignal,
+            2 => Self::Held,
+            3 => Self::Listening,
+            4 => Self::Adjusting,
+            5 => Self::Matched,
+            _ => Self::Ready,
+        }
+    }
 }
 
 impl MatchState {
@@ -37,6 +89,7 @@ pub struct GuiStatus {
     locked_gain_db: AtomicU32,
     progress: AtomicU32,
     state: AtomicU32,
+    activity: AtomicU32,
 }
 
 impl Default for GuiStatus {
@@ -55,10 +108,12 @@ impl GuiStatus {
             locked_gain_db: AtomicU32::new(0.0_f32.to_bits()),
             progress: AtomicU32::new(0.0_f32.to_bits()),
             state: AtomicU32::new(MatchState::Ready as u32),
+            activity: AtomicU32::new(MatchActivity::Ready as u32),
         }
     }
 
     /// Publish one audio-block status snapshot.
+    #[allow(dead_code)]
     pub fn update(
         &self,
         input_peak_db: f32,
@@ -66,6 +121,26 @@ impl GuiStatus {
         locked_gain_db: f32,
         progress: f32,
         state: MatchState,
+    ) {
+        self.update_with_activity(
+            input_peak_db,
+            output_peak_db,
+            locked_gain_db,
+            progress,
+            state,
+            MatchActivity::from_match_state(state),
+        );
+    }
+
+    /// Publish one audio-block status snapshot with live matcher activity.
+    pub fn update_with_activity(
+        &self,
+        input_peak_db: f32,
+        output_peak_db: f32,
+        locked_gain_db: f32,
+        progress: f32,
+        state: MatchState,
+        activity: MatchActivity,
     ) {
         self.input_peak_db
             .store(sanitize_db(input_peak_db).to_bits(), Ordering::Relaxed);
@@ -78,6 +153,7 @@ impl GuiStatus {
         self.progress
             .store(progress.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
         self.state.store(state as u32, Ordering::Relaxed);
+        self.activity.store(activity as u32, Ordering::Relaxed);
     }
 
     /// Publish protected output RMS without changing peak telemetry.
@@ -128,6 +204,12 @@ impl GuiStatus {
     pub fn state(&self) -> MatchState {
         MatchState::from_raw(self.state.load(Ordering::Relaxed))
     }
+
+    /// Read the live matcher activity.
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
+    pub fn activity(&self) -> MatchActivity {
+        MatchActivity::from_raw(self.activity.load(Ordering::Relaxed))
+    }
 }
 
 #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
@@ -145,7 +227,7 @@ fn sanitize_db(value: f32) -> f32 {
 
 fn sanitize_gain_db(value: f32) -> f32 {
     if value.is_finite() {
-        value.clamp(-24.0, 24.0)
+        value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
     } else {
         0.0
     }

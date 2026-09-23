@@ -336,10 +336,24 @@ impl GainSnapEngine {
 
         if !request {
             if self.previous_match_request && self.state == MatchState::Measuring {
-                self.finish_measurement();
+                self.finish_measurement(params);
                 measurement_finished = true;
             }
             self.previous_match_request = false;
+            if matches!(self.state, MatchState::Ready | MatchState::NoSignal)
+                && params.has_match_result()
+            {
+                // A host reset or fresh activation has no transient matcher
+                // state. The persisted result re-arms the held monitor.
+                self.measurement_target_db = params.target_db();
+                self.measurement_target_peak = 10.0_f32.powf(self.measurement_target_db / 20.0);
+                self.measurement_rms_mode = self.rms_mode;
+                self.state = MatchState::Locked;
+            } else if self.state == MatchState::Locked && !params.has_match_result() {
+                // Loading an unarmed snapshot into an existing instance must
+                // also stop held monitoring.
+                self.state = MatchState::Ready;
+            }
         } else if !self.previous_match_request || mode_changed {
             self.measurement_target_db = params.target_db();
             self.measurement_target_peak = 10.0_f32.powf(self.measurement_target_db / 20.0);
@@ -367,8 +381,11 @@ impl GainSnapEngine {
 
         let stored_gain_db = params.locked_gain_db();
         if self.state == MatchState::Locked {
-            self.measurement_target_db = params.target_db();
-            self.measurement_target_peak = 10.0_f32.powf(self.measurement_target_db / 20.0);
+            let target_db = params.target_db();
+            if target_db != self.measurement_target_db {
+                self.measurement_target_db = target_db;
+                self.measurement_target_peak = 10.0_f32.powf(target_db / 20.0);
+            }
         }
         if !measurement_finished
             && self.state != MatchState::Measuring
@@ -875,12 +892,13 @@ impl GainSnapEngine {
         }
     }
 
-    fn finish_measurement(&mut self) {
+    fn finish_measurement(&mut self, params: &GainSnapParams) {
         if self.measurement_level <= SILENCE_PEAK_LINEAR {
             self.state = MatchState::NoSignal;
             return;
         }
         self.state = MatchState::Locked;
+        params.set_has_match_result(true);
         self.held_rms_check_frames = 0;
         self.held_rms_power = [0.0; 2];
     }
@@ -1083,6 +1101,69 @@ mod tests {
         let reduced_gain = params.locked_gain_db();
         run_frames(&mut engine, &params, 0.05, 1_000);
         assert_eq!(params.locked_gain_db(), reduced_gain);
+    }
+
+    #[test]
+    fn saved_held_match_rearms_after_fresh_engine_activation() {
+        for rms_mode in [false, true] {
+            let params = GainSnapParams::new();
+            params.set_param(crate::params::PARAM_RMS_MODE, f32::from(rms_mode));
+            params.set_param(PARAM_MATCH, 1.0);
+            let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+            run_block(&mut engine, &params, 0.1, 2_000);
+            params.set_param(PARAM_MATCH, 0.0);
+            engine.begin_block(&params);
+            assert_eq!(engine.report().state, MatchState::Locked);
+            assert!(params.has_match_result());
+
+            let payload = crate::state::encode_payload(&params);
+            let snapshot = crate::state::decode_payload(crate::state::STATE_VERSION, &payload)
+                .expect("valid saved match");
+            let restored = GainSnapParams::new();
+            crate::state::apply_snapshot(&restored, snapshot);
+            let previous_gain = restored.locked_gain_db();
+            let mut reactivated = GainSnapEngine::new(1_000.0, previous_gain);
+            reactivated.begin_block(&restored);
+            assert_eq!(reactivated.report().state, MatchState::Locked);
+            assert!(!restored.match_requested());
+
+            run_frames(&mut reactivated, &restored, 0.8, 2_000);
+            assert!(restored.locked_gain_db() < previous_gain - 10.0);
+            assert_eq!(reactivated.report().state, MatchState::Locked);
+        }
+    }
+
+    #[test]
+    fn untouched_instance_remains_unarmed_after_activation() {
+        let params = GainSnapParams::new();
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Ready);
+        assert_eq!(engine.process_frame(&params, 0.8, -0.4), (0.8, -0.4));
+        assert!(!params.has_match_result());
+    }
+
+    #[test]
+    fn loading_unarmed_state_disarms_an_existing_held_match() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+        run_block(&mut engine, &params, 0.1, 2_000);
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Locked);
+
+        let unarmed = GainSnapParams::new();
+        let snapshot = crate::state::decode_payload(
+            crate::state::STATE_VERSION,
+            &crate::state::encode_payload(&unarmed),
+        )
+        .expect("valid unarmed state");
+        crate::state::apply_snapshot(&params, snapshot);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Ready);
+        run_frames(&mut engine, &params, 0.8, 2_000);
+        assert_eq!(params.locked_gain_db(), 0.0);
     }
 
     #[test]
@@ -2081,5 +2162,24 @@ mod tests {
         engine.reset(&params);
         engine.begin_block(&params);
         assert_eq!(engine.process_frame(&params, 1.0, -1.0), (0.0, -0.0));
+    }
+
+    #[test]
+    #[cfg(feature = "vst3")]
+    fn host_processing_reset_rearms_a_completed_held_match() {
+        let params = GainSnapParams::new();
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+        run_block(&mut engine, &params, 0.1, 2_000);
+        params.set_param(PARAM_MATCH, 0.0);
+        engine.begin_block(&params);
+        let previous_gain = params.locked_gain_db();
+
+        engine.reset(&params);
+        engine.begin_block(&params);
+        assert_eq!(engine.report().state, MatchState::Locked);
+        run_frames(&mut engine, &params, 0.8, 1_000);
+        assert!(params.locked_gain_db() < previous_gain - 10.0);
+        assert!(!params.match_requested());
     }
 }

@@ -49,8 +49,11 @@ Peak correction supports up to +120 dB for usable signals above the -120 dBFS
 silence floor; RMS correction retains its +24 dB boost cap. The fixed -24 dB
 attenuation limit and the existing sample-peak guard still apply.
 
-State version 3 stores mode in previously reserved payload byte 5. Version 1
-and 2 projects load in Peak mode, preserving the existing Match migration rules.
+State version 4 stores the completed-match flag in previously reserved payload
+byte 6, so held monitoring survives processing resets and project reloads.
+Version 3 stores mode in byte 5. Version 1 and 2 projects load in Peak mode.
+Older saved states remain readable and require a fresh completed match before
+held monitoring becomes armed.
 
 ## Constraints
 

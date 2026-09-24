@@ -63,12 +63,15 @@ When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the meter accepts direct dBFS entry as well.
 
-The vertical meter shows the selected smoothed output level in realtime as one thick
-orange column, with a small dB scale at its left edge. A small triangle beside
-the meter marks the target and acts as the target control; the compact
-interface keeps the level overview visible without separate numeric readouts.
-The default editor is 208 × 212 logical pixels, with aligned action buttons and
-tighter spacing. The compact activity rail below Normalize has three short
+The tall meter shows the output peak in orange and RMS in teal, with numeric
+readouts beside it. The left arrow and horizontal line set the target. Select
+Peak or RMS to choose which level Match uses. In Manual mode, drag the round
+gain control vertically for coarse adjustments or drag the right meter arrow
+for fine adjustments. Arrow keys adjust a focused control; Shift makes smaller
+steps. Using either gain control enters Manual mode. Match and Normalize return
+to Auto mode. Manual gain remains fixed when upstream audio gets louder; the
+sample-peak guard still prevents output above 0 dBFS. The default editor is
+250 × 424 logical pixels. The activity rail below Normalize has three short
 stages: Listening, Adjusting, and Matched. It reports live audio activity
 independently of the Match lifecycle; disabled instances show Ready, Held, or
 No signal. Matched means the correction has settled within the available gain

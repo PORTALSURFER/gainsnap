@@ -23,13 +23,16 @@ use toybox::gpui_gui::{
 };
 
 use crate::clap_plugin::HostParamRequester;
-use crate::params::{PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB};
+use crate::params::{
+    MANUAL_GAIN_MAX_DB, MANUAL_GAIN_MIN_DB, PARAM_MANUAL_GAIN_DB, PARAM_MANUAL_MODE, PARAM_MATCH,
+    PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB,
+};
 use crate::status::{GuiStatus, MatchActivity, MatchState};
 
 /// Preferred logical editor width for the compact toggle control surface.
-pub const WINDOW_WIDTH: u32 = 208;
+pub const WINDOW_WIDTH: u32 = 250;
 /// Preferred logical editor height for the compact toggle control surface.
-pub const WINDOW_HEIGHT: u32 = 212;
+pub const WINDOW_HEIGHT: u32 = 424;
 /// Minimum logical editor width.
 pub const MIN_WINDOW_WIDTH: u32 = WINDOW_WIDTH;
 /// Minimum logical editor height.
@@ -40,8 +43,8 @@ pub const MAX_WINDOW_WIDTH: u32 = 480;
 pub const MAX_WINDOW_HEIGHT: u32 = 520;
 
 const TARGET_TEXT_SYNC_EPSILON: f32 = 0.0001;
-const TARGET_CONTROL_WIDTH: f32 = 68.0;
-const TARGET_METER_HEIGHT: f32 = 148.0;
+const TARGET_CONTROL_WIDTH: f32 = 110.0;
+const TARGET_METER_HEIGHT: f32 = 360.0;
 const TARGET_ENTRY_HEIGHT: f32 = 28.0;
 const TARGET_CONTROL_SPACING: f32 = 6.0;
 const ACTION_CONTROL_WIDTH: f32 = 96.0;
@@ -58,7 +61,7 @@ const ACTIVITY_RAIL_GAP: f32 = 3.0;
 const ACTIVITY_SEGMENT_HEIGHT: f32 = 4.0;
 const ACTIVITY_LABEL_HEIGHT: f32 = 14.0;
 const ACTIVITY_LABEL_GAP: f32 = 4.0;
-const TARGET_METER_TRACK_WIDTH: f32 = 14.0;
+const TARGET_METER_TRACK_WIDTH: f32 = 22.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
 const TARGET_METER_TICK_COUNT: usize = 13;
 const TARGET_METER_TICK_WIDTH: f32 = 4.0;
@@ -99,6 +102,7 @@ const BG_PRIMARY: u32 = 0x1b1e1e;
 const BORDER: u32 = 0x282b2b;
 const BORDER_EMPHASIS: u32 = 0x404342;
 const ACCENT: u32 = 0xe95843;
+const RMS_COLOR: u32 = 0x4ab9ae;
 const ACCENT_DANGER: u32 = 0xef4c3d;
 const TEXT_PRIMARY: u32 = 0xd8d7d3;
 const TEXT_MUTED: u32 = 0x999b9a;
@@ -223,6 +227,9 @@ struct DisplaySnapshot {
     match_requested: bool,
     rms_mode: bool,
     output_peak_db: u32,
+    output_rms_db: u32,
+    manual_gain_db: u32,
+    manual_mode: bool,
     state: MatchState,
     activity: MatchActivity,
 }
@@ -237,8 +244,10 @@ impl DisplaySnapshot {
                 .to_bits(),
             match_requested: params.match_requested(),
             rms_mode: params.rms_mode(),
-            output_peak_db: sanitize_meter_level_db(status.output_level_db(params.rms_mode()))
-                .to_bits(),
+            output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
+            output_rms_db: sanitize_meter_level_db(status.output_rms_db()).to_bits(),
+            manual_gain_db: params.manual_gain_db().to_bits(),
+            manual_mode: params.manual_mode(),
             state: status.state(),
             activity: status.activity(),
         }
@@ -256,6 +265,7 @@ struct EditorController {
     edit_sink: Option<Arc<dyn HostParamEditSink>>,
     target_text_param: f32,
     output_peak_db: f32,
+    output_rms_db: f32,
     meter_last_update: Instant,
     pulse_started: Option<Instant>,
     pulse_alpha: u8,
@@ -273,7 +283,8 @@ impl EditorController {
             .get_param(PARAM_TARGET_DB)
             .unwrap_or(TARGET_RANGE.default)
             .clamp(TARGET_RANGE.min, TARGET_RANGE.max);
-        let output_peak_db = sanitize_meter_level_db(status.output_level_db(params.rms_mode()));
+        let output_peak_db = sanitize_meter_level_db(status.output_peak_db());
+        let output_rms_db = sanitize_meter_level_db(status.output_rms_db());
         Self {
             params,
             automation_queue,
@@ -283,6 +294,7 @@ impl EditorController {
             edit_sink,
             target_text_param: target_db,
             output_peak_db,
+            output_rms_db,
             meter_last_update: Instant::now(),
             pulse_started: None,
             pulse_alpha: 255,
@@ -291,6 +303,36 @@ impl EditorController {
 
     fn target_db(&self) -> f32 {
         self.parameter_value(PARAM_TARGET_DB, TARGET_RANGE)
+    }
+
+    fn manual_gain_db(&self) -> f32 {
+        self.parameter_value(
+            PARAM_MANUAL_GAIN_DB,
+            ParamRange {
+                min: MANUAL_GAIN_MIN_DB,
+                max: MANUAL_GAIN_MAX_DB,
+                default: 0.0,
+            },
+        )
+    }
+
+    fn set_manual_gain_db(&self, gain_db: f32) {
+        self.begin(PARAM_MANUAL_GAIN_DB);
+        self.value(
+            PARAM_MANUAL_GAIN_DB,
+            gain_db.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB),
+        );
+        self.end(PARAM_MANUAL_GAIN_DB);
+    }
+
+    fn activate_manual(&self) {
+        if !self.params.manual_mode() {
+            self.set_manual_gain_db(self.params.locked_gain_db());
+            self.toggle_value(PARAM_MANUAL_MODE, true);
+            if self.params.match_requested() {
+                self.toggle_value(PARAM_MATCH, false);
+            }
+        }
     }
 
     fn target_text(&self) -> String {
@@ -400,6 +442,7 @@ impl EditorController {
     }
 
     fn normalize(&mut self) -> String {
+        self.toggle_value(PARAM_MANUAL_MODE, false);
         self.toggle_value(PARAM_RMS_MODE, false);
         self.set_target_db(TARGET_MAX_DB);
         self.toggle_value(PARAM_MATCH, true);
@@ -414,13 +457,16 @@ impl EditorController {
     }
 
     fn advance_meter_at(&mut self, now: Instant) -> bool {
-        let target_db =
-            sanitize_meter_level_db(self.status.output_level_db(self.params.rms_mode()));
+        let peak_db = sanitize_meter_level_db(self.status.output_peak_db());
+        let rms_db = sanitize_meter_level_db(self.status.output_rms_db());
         let elapsed = now.saturating_duration_since(self.meter_last_update);
         self.meter_last_update = now;
-        let next_db = smooth_meter_level_db(self.output_peak_db, target_db, elapsed);
-        let changed = (next_db - self.output_peak_db).abs() > f32::EPSILON;
-        self.output_peak_db = next_db;
+        let next_peak = smooth_meter_level_db(self.output_peak_db, peak_db, elapsed);
+        let next_rms = smooth_meter_level_db(self.output_rms_db, rms_db, elapsed);
+        let changed = (next_peak - self.output_peak_db).abs() > f32::EPSILON
+            || (next_rms - self.output_rms_db).abs() > f32::EPSILON;
+        self.output_peak_db = next_peak;
+        self.output_rms_db = next_rms;
         changed
     }
 
@@ -446,9 +492,10 @@ impl EditorController {
     }
 
     fn meter_needs_realtime_redraw(&self) -> bool {
-        let target_db =
-            sanitize_meter_level_db(self.status.output_level_db(self.params.rms_mode()));
-        (self.output_peak_db - target_db).abs() > METER_SETTLE_EPSILON_DB
+        (self.output_peak_db - sanitize_meter_level_db(self.status.output_peak_db())).abs()
+            > METER_SETTLE_EPSILON_DB
+            || (self.output_rms_db - sanitize_meter_level_db(self.status.output_rms_db())).abs()
+                > METER_SETTLE_EPSILON_DB
     }
 }
 
@@ -464,12 +511,21 @@ pub(crate) struct GainSnapEditor {
     #[allow(dead_code)]
     target_step_subscription: Subscription,
     meter_focus_handle: FocusHandle,
+    knob_focus_handle: FocusHandle,
+    gain_mode_focus_handle: FocusHandle,
     mode_focus_handle: FocusHandle,
     match_focus_handle: FocusHandle,
     restart_focus_handle: FocusHandle,
     normalize_focus_handle: FocusHandle,
     meter_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     target_dragging: bool,
+    gain_dragging: bool,
+    gain_marker_selected: bool,
+    gain_drag_start_db: f32,
+    gain_drag_start_level_db: f32,
+    knob_dragging: bool,
+    knob_drag_start_y: f32,
+    knob_drag_start_gain_db: f32,
     target_drag_offset_y: f32,
     last_display_snapshot: DisplaySnapshot,
 }
@@ -531,12 +587,21 @@ impl GainSnapEditor {
             target_cancel_subscription,
             target_step_subscription,
             meter_focus_handle: cx.focus_handle(),
+            knob_focus_handle: cx.focus_handle(),
+            gain_mode_focus_handle: cx.focus_handle(),
             mode_focus_handle: cx.focus_handle(),
             match_focus_handle: cx.focus_handle(),
             restart_focus_handle: cx.focus_handle(),
             normalize_focus_handle: cx.focus_handle(),
             meter_bounds: Rc::new(RefCell::new(None)),
             target_dragging: false,
+            gain_dragging: false,
+            gain_marker_selected: false,
+            gain_drag_start_db: 0.0,
+            gain_drag_start_level_db: 0.0,
+            knob_dragging: false,
+            knob_drag_start_y: 0.0,
+            knob_drag_start_gain_db: 0.0,
             target_drag_offset_y: 0.0,
             last_display_snapshot,
         }
@@ -576,6 +641,7 @@ impl GainSnapEditor {
         cx: &mut Context<Self>,
     ) {
         let button_focused = self.mode_focus_handle.is_focused(window)
+            || self.gain_mode_focus_handle.is_focused(window)
             || self.match_focus_handle.is_focused(window)
             || self.restart_focus_handle.is_focused(window)
             || self.normalize_focus_handle.is_focused(window);
@@ -594,7 +660,8 @@ impl GainSnapEditor {
             return;
         }
         let meter_focused = self.meter_focus_handle.is_focused(window);
-        if !meter_focused {
+        let knob_focused = self.knob_focus_handle.is_focused(window);
+        if !meter_focused && !knob_focused {
             return;
         }
         if event.keystroke.modifiers.control
@@ -613,13 +680,30 @@ impl GainSnapEditor {
             _ => None,
         };
         if let Some(direction) = direction {
-            let next = step_target_db(
-                self.controller.target_db(),
-                direction,
-                event.keystroke.modifiers.shift,
-            );
-            self.controller.set_target_db(next);
-            self.set_target_text_force(self.controller.target_text(), cx);
+            if knob_focused || self.gain_marker_selected {
+                self.controller.activate_manual();
+                let step = if knob_focused {
+                    if event.keystroke.modifiers.shift {
+                        0.1
+                    } else {
+                        1.0
+                    }
+                } else if event.keystroke.modifiers.shift {
+                    0.01
+                } else {
+                    0.1
+                };
+                self.controller
+                    .set_manual_gain_db(self.controller.manual_gain_db() + direction.sign() * step);
+            } else {
+                let next = step_target_db(
+                    self.controller.target_db(),
+                    direction,
+                    event.keystroke.modifiers.shift,
+                );
+                self.controller.set_target_db(next);
+                self.set_target_text_force(self.controller.target_text(), cx);
+            }
             cx.stop_propagation();
             cx.notify();
             return;
@@ -629,7 +713,7 @@ impl GainSnapEditor {
         if event.keystroke.modifiers.function {
             return;
         }
-        if meter_focused {
+        if meter_focused && !self.gain_marker_selected {
             let text = match event.keystroke.key.as_str() {
                 "home" => {
                     self.controller.set_target_db(TARGET_RANGE.min);
@@ -657,17 +741,38 @@ impl GainSnapEditor {
     ) {
         window.focus(&self.meter_focus_handle, cx);
         let bounds = self.meter_bounds.borrow().as_ref().copied();
-        self.target_dragging = true;
         if let Some(bounds) = bounds {
-            self.target_drag_offset_y = target_marker_center_y(bounds, self.controller.target_db())
-                .map(|center_y| f32::from(event.position.y) - center_y)
-                .unwrap_or(0.0);
+            let track = target_meter_track(bounds);
+            self.gain_marker_selected = f32::from(event.position.x) >= f32::from(track.right());
+            if self.gain_marker_selected {
+                self.controller.activate_manual();
+                self.gain_dragging = true;
+                self.gain_drag_start_db = self.controller.manual_gain_db();
+                self.gain_drag_start_level_db = (if self.controller.params.rms_mode() {
+                    self.controller.output_rms_db
+                } else {
+                    self.controller.output_peak_db
+                })
+                .clamp(TARGET_MIN_DB, TARGET_MAX_DB);
+                self.target_drag_offset_y =
+                    target_marker_center_y(bounds, self.gain_drag_start_level_db)
+                        .map(|center_y| f32::from(event.position.y) - center_y)
+                        .unwrap_or(0.0);
+            } else {
+                self.target_dragging = true;
+                self.target_drag_offset_y =
+                    target_marker_center_y(bounds, self.controller.target_db())
+                        .map(|center_y| f32::from(event.position.y) - center_y)
+                        .unwrap_or(0.0);
+            }
         }
         cx.notify();
     }
 
     fn meter_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.target_dragging || event.pressed_button != Some(MouseButton::Left) {
+        if (!self.target_dragging && !self.gain_dragging)
+            || event.pressed_button != Some(MouseButton::Left)
+        {
             return;
         }
         let bounds = self.meter_bounds.borrow().as_ref().copied();
@@ -676,15 +781,67 @@ impl GainSnapEditor {
                 event.position.x,
                 event.position.y - px(self.target_drag_offset_y),
             );
-            self.controller.set_target_from_position(bounds, position);
-            self.set_target_text(self.controller.target_text(), cx);
+            if self.gain_dragging {
+                let geometry = target_marker_geometry(bounds);
+                if let Some(geometry) = geometry {
+                    let fraction = clamp_fraction(
+                        (geometry.bottom_center_y - f32::from(position.y))
+                            / geometry.travel.max(1.0),
+                    );
+                    let level_db = TARGET_RANGE.denormalize(fraction);
+                    self.controller.set_manual_gain_db(
+                        self.gain_drag_start_db + level_db - self.gain_drag_start_level_db,
+                    );
+                }
+            } else {
+                self.controller.set_target_from_position(bounds, position);
+                self.set_target_text(self.controller.target_text(), cx);
+            }
             cx.notify();
         }
     }
 
     fn meter_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
         self.target_dragging = false;
+        self.gain_dragging = false;
         self.target_drag_offset_y = 0.0;
+    }
+
+    fn knob_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.knob_focus_handle, cx);
+        self.controller.activate_manual();
+        self.knob_dragging = true;
+        self.knob_drag_start_y = f32::from(event.position.y);
+        self.knob_drag_start_gain_db = self.controller.manual_gain_db();
+        cx.notify();
+    }
+
+    fn knob_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.knob_dragging && event.pressed_button == Some(MouseButton::Left) {
+            self.controller.set_manual_gain_db(
+                self.knob_drag_start_gain_db
+                    + (self.knob_drag_start_y - f32::from(event.position.y)) * 0.5,
+            );
+            cx.notify();
+        }
+    }
+
+    fn knob_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.knob_dragging = false;
+    }
+
+    fn toggle_gain_mode(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.controller.params.manual_mode() {
+            self.controller.toggle_value(PARAM_MANUAL_MODE, false);
+        } else {
+            self.controller.activate_manual();
+        }
+        cx.notify();
     }
 
     fn toggle_mode(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -694,6 +851,9 @@ impl GainSnapEditor {
     }
 
     fn toggle_match(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.controller.params.manual_mode() {
+            self.controller.toggle_value(PARAM_MANUAL_MODE, false);
+        }
         self.controller
             .toggle_value(PARAM_MATCH, !self.controller.params.match_requested());
         cx.notify();
@@ -747,13 +907,25 @@ impl Render for GainSnapEditor {
         let meter_bounds = Rc::clone(&self.meter_bounds);
         let target_db = self.controller.target_db();
         let output_peak_db = self.controller.output_peak_db;
+        let output_rms_db = self.controller.output_rms_db;
         let target_focused = self.target_input.read(cx).focus_handle().is_focused(window);
         let meter_focused = self.meter_focus_handle.is_focused(window);
+        let gain_marker_selected = self.gain_marker_selected;
         let mode_rms = self.controller.params.rms_mode();
         let match_requested = self.controller.params.match_requested();
+        let manual_mode = self.controller.params.manual_mode();
+        let manual_gain_db = self.controller.manual_gain_db();
         let pulse_alpha = self.controller.pulse_alpha;
         let match_activity = self.controller.status.activity();
         let target_input = self.target_input.clone();
+        let meter_paint = MeterPaintState {
+            target_db,
+            output_peak_db,
+            output_rms_db,
+            rms_mode: mode_rms,
+            focused: meter_focused,
+            gain_selected: gain_marker_selected,
+        };
 
         let meter = div()
             .id("target-meter")
@@ -771,7 +943,7 @@ impl Render for GainSnapEditor {
                         *meter_bounds.borrow_mut() = Some(bounds);
                     },
                     move |bounds, _, window, cx| {
-                        paint_meter(bounds, target_db, output_peak_db, meter_focused, window, cx);
+                        paint_meter(bounds, meter_paint, window, cx);
                     },
                 )
                 .size_full(),
@@ -819,6 +991,15 @@ impl Render for GainSnapEditor {
             (ACTION_CONTROL_WIDTH, 24.0),
             &self.mode_focus_handle,
             cx.listener(Self::toggle_mode),
+        );
+        let gain_mode = button_element(
+            "gain-mode",
+            if manual_mode { "MANUAL" } else { "AUTO" },
+            manual_mode,
+            true,
+            (ACTION_CONTROL_WIDTH, 24.0),
+            &self.gain_mode_focus_handle,
+            cx.listener(Self::toggle_gain_mode),
         );
         let match_button = button_element(
             "match-now",
@@ -884,6 +1065,62 @@ impl Render for GainSnapEditor {
             )
             .child(normalize);
 
+        let knob = div()
+            .id("manual-gain-knob")
+            .w(px(72.0))
+            .h(px(72.0))
+            .rounded_full()
+            .border_1()
+            .border_color(if self.knob_focus_handle.is_focused(window) {
+                solid(ACCENT)
+            } else {
+                solid(BORDER_EMPHASIS)
+            })
+            .bg(solid(BG_PRIMARY))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(11.0))
+            .text_color(solid(TEXT_PRIMARY))
+            .aria_label("Coarse manual gain, drag vertically or use arrow keys")
+            .track_focus(&self.knob_focus_handle)
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::knob_mouse_down))
+            .on_mouse_move(cx.listener(Self::knob_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::knob_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::knob_mouse_up))
+            .child(format!("{manual_gain_db:+.1}"));
+        let manual_control = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(9.0))
+            .child(gain_mode)
+            .child(knob)
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("COARSE GAIN"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("RIGHT: FINE"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(solid(ACCENT))
+                    .child(format!("PEAK {output_peak_db:.1} dB")),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(solid(RMS_COLOR))
+                    .child(format!("RMS  {output_rms_db:.1} dB")),
+            );
+
         let active_stage = activity_stage(match_activity);
         let segment_width =
             (ACTION_CONTROL_WIDTH - ACTIVITY_RAIL_GAP * 2.0) / ACTIVITY_SEGMENT_COUNT as f32;
@@ -915,11 +1152,19 @@ impl Render for GainSnapEditor {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(activity_label_color(match_activity))
+            .text_color(if manual_mode {
+                solid(TEXT_PRIMARY)
+            } else {
+                activity_label_color(match_activity)
+            })
             .font(font("Ioskeley Mono"))
             .text_size(px(11.0))
             .line_height(px(12.0))
-            .child(activity_label_text(match_activity));
+            .child(if manual_mode {
+                "Manual"
+            } else {
+                activity_label_text(match_activity)
+            });
         let activity_status = div()
             .flex()
             .flex_col()
@@ -940,6 +1185,7 @@ impl Render for GainSnapEditor {
             .h(px(ACTION_CONTROL_HEIGHT))
             .gap(px(8.0))
             .child(matching)
+            .child(manual_control)
             .child(activity_status);
 
         div()
@@ -1135,29 +1381,46 @@ fn target_level_fraction(db: f32) -> f32 {
     }
 }
 
-fn paint_meter(
-    bounds: Bounds<Pixels>,
+#[derive(Clone, Copy)]
+struct MeterPaintState {
     target_db: f32,
     output_peak_db: f32,
+    output_rms_db: f32,
+    rms_mode: bool,
     focused: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
+    gain_selected: bool,
+}
+
+fn paint_meter(bounds: Bounds<Pixels>, state: MeterPaintState, window: &mut Window, cx: &mut App) {
     let Some(geometry) = target_marker_geometry(bounds) else {
         return;
     };
     let track = geometry.track;
     window.paint_quad(fill(track, solid(BG_PRIMARY)));
-    let level = target_level_fraction(output_peak_db);
-    if level > 0.0 {
-        let level_height = f32::from(track.size.height) * level;
-        window.paint_quad(fill(
-            Bounds::from_corners(
-                point(track.left(), track.bottom() - px(level_height)),
-                track.bottom_right(),
-            ),
-            solid(ACCENT),
-        ));
+    let half_width = f32::from(track.size.width) * 0.5;
+    for (level_db, left, right, color) in [
+        (
+            state.output_peak_db,
+            track.left(),
+            track.left() + px(half_width),
+            ACCENT,
+        ),
+        (
+            state.output_rms_db,
+            track.left() + px(half_width),
+            track.right(),
+            RMS_COLOR,
+        ),
+    ] {
+        let level = target_level_fraction(level_db);
+        if level > 0.0 {
+            let top_y =
+                target_marker_center_y(bounds, level_db).unwrap_or(f32::from(track.bottom()));
+            window.paint_quad(fill(
+                Bounds::from_corners(point(left, px(top_y)), point(right, track.bottom())),
+                solid(color),
+            ));
+        }
     }
     let border_color = solid(BORDER);
     window.paint_quad(fill(
@@ -1197,7 +1460,7 @@ fn paint_meter(
         } else {
             TARGET_METER_TICK_WIDTH - 1.0
         };
-        let x = f32::from(track.left()) - TARGET_MARKER_GAP - tick_width;
+        let x = f32::from(track.left()) - tick_width;
         window.paint_quad(fill(
             Bounds::from_corners(
                 point(
@@ -1217,7 +1480,7 @@ fn paint_meter(
             f32::from(bounds.top()),
             f32::from(bounds.bottom()) - TARGET_METER_LABEL_FONT_SIZE,
         );
-        let x = f32::from(track.left()) - TARGET_METER_LABEL_GAP - TARGET_METER_LABEL_WIDTH;
+        let x = f32::from(bounds.left()) + TARGET_METER_LABEL_GAP;
         let text: gpui::SharedString = label.into();
         let run = TextRun {
             len: text.len(),
@@ -1242,7 +1505,7 @@ fn paint_meter(
         );
     }
 
-    let fraction = target_level_fraction(target_db);
+    let fraction = target_level_fraction(state.target_db);
     let center_y = if fraction >= 1.0 {
         geometry.top_center_y
     } else if fraction <= 0.0 {
@@ -1250,43 +1513,80 @@ fn paint_meter(
     } else {
         geometry.bottom_center_y - fraction * geometry.travel
     };
-    let marker_left = f32::from(track.right()) + TARGET_MARKER_GAP;
+    // A full-width rule keeps the selected target legible against both meter colors.
+    let line_y = px(center_y);
+    window.paint_quad(fill(
+        Bounds::from_corners(
+            point(track.left(), line_y),
+            point(track.right(), line_y + px(1.0)),
+        ),
+        rgba(0xd8d7d3dd),
+    ));
+    let marker_left = f32::from(track.left()) - TARGET_MARKER_GAP - TARGET_MARKER_WIDTH;
     let mut marker = gpui::PathBuilder::fill();
-    marker.move_to(point(px(marker_left), px(center_y)));
+    marker.move_to(point(px(marker_left + TARGET_MARKER_WIDTH), px(center_y)));
     marker.line_to(point(
-        px(marker_left + TARGET_MARKER_WIDTH),
+        px(marker_left),
         px(center_y - geometry.marker_height * 0.5),
     ));
     marker.line_to(point(
-        px(marker_left + TARGET_MARKER_WIDTH),
+        px(marker_left),
         px(center_y + geometry.marker_height * 0.5),
     ));
     marker.close();
     if let Ok(marker) = marker.build() {
         window.paint_path(
             marker,
-            if focused {
+            if state.focused && !state.gain_selected {
                 rgba(0xe95843ff)
             } else {
                 rgba(0xd8d7d3ff)
             },
         );
     }
-    if focused {
+    if state.focused && !state.gain_selected {
         let mut emphasis = gpui::PathBuilder::stroke(px(1.0));
-        emphasis.move_to(point(px(marker_left), px(center_y)));
+        emphasis.move_to(point(px(marker_left + TARGET_MARKER_WIDTH), px(center_y)));
         emphasis.line_to(point(
-            px(marker_left + TARGET_MARKER_WIDTH),
+            px(marker_left),
             px(center_y - geometry.marker_height * 0.5),
         ));
         emphasis.line_to(point(
-            px(marker_left + TARGET_MARKER_WIDTH),
+            px(marker_left),
             px(center_y + geometry.marker_height * 0.5),
         ));
         emphasis.close();
         if let Ok(emphasis) = emphasis.build() {
             window.paint_path(emphasis, rgba(0xe95843ff));
         }
+    }
+    let gain_db = if state.rms_mode {
+        state.output_rms_db
+    } else {
+        state.output_peak_db
+    };
+    let gain_y = target_marker_center_y(bounds, gain_db).unwrap_or(center_y);
+    let gain_x = f32::from(track.right()) + TARGET_MARKER_GAP;
+    let mut gain_marker = gpui::PathBuilder::fill();
+    gain_marker.move_to(point(px(gain_x), px(gain_y)));
+    gain_marker.line_to(point(
+        px(gain_x + TARGET_MARKER_WIDTH),
+        px(gain_y - TARGET_MARKER_HEIGHT * 0.5),
+    ));
+    gain_marker.line_to(point(
+        px(gain_x + TARGET_MARKER_WIDTH),
+        px(gain_y + TARGET_MARKER_HEIGHT * 0.5),
+    ));
+    gain_marker.close();
+    if let Ok(path) = gain_marker.build() {
+        window.paint_path(
+            path,
+            if state.focused && state.gain_selected {
+                solid(ACCENT)
+            } else {
+                solid(TEXT_PRIMARY)
+            },
+        );
     }
 }
 

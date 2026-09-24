@@ -16,6 +16,10 @@ pub const PARAM_MATCH: ClapId = ClapId::new(2);
 pub const PARAM_LOCKED_GAIN_DB: ClapId = ClapId::new(3);
 /// Peak (0) or RMS (1) matching and metering.
 pub const PARAM_RMS_MODE: ClapId = ClapId::new(4);
+/// User-adjustable gain in Manual mode.
+pub const PARAM_MANUAL_GAIN_DB: ClapId = ClapId::new(5);
+/// Auto (0) or Manual (1) gain control.
+pub const PARAM_MANUAL_MODE: ClapId = ClapId::new(6);
 
 /// Lowest supported target level in dBFS.
 pub const TARGET_MIN_DB: f32 = -36.0;
@@ -32,6 +36,9 @@ pub const GAIN_MIN_DB: f32 = -24.0;
 pub const GAIN_MAX_DB: f32 = 120.0;
 /// Default applied gain before the first successful match.
 pub const DEFAULT_LOCKED_GAIN_DB: f32 = 0.0;
+/// Manual Utility-style gain range in dB.
+pub const MANUAL_GAIN_MIN_DB: f32 = -36.0;
+pub const MANUAL_GAIN_MAX_DB: f32 = 36.0;
 
 /// Stable metadata for a single exposed parameter.
 #[derive(Clone, Copy, Debug)]
@@ -71,7 +78,7 @@ impl ParamDef {
 }
 
 /// Parameters in stable host-visible order.
-pub const PARAM_DEFS: [ParamDef; 4] = [
+pub const PARAM_DEFS: [ParamDef; 6] = [
     ParamDef {
         id: PARAM_TARGET_DB,
         name: b"Target Level",
@@ -112,6 +119,26 @@ pub const PARAM_DEFS: [ParamDef; 4] = [
         automatable: true,
         stepped: true,
     },
+    ParamDef {
+        id: PARAM_MANUAL_GAIN_DB,
+        name: b"Manual Gain",
+        module: b"Manual",
+        min: MANUAL_GAIN_MIN_DB as f64,
+        max: MANUAL_GAIN_MAX_DB as f64,
+        default: 0.0,
+        automatable: true,
+        stepped: false,
+    },
+    ParamDef {
+        id: PARAM_MANUAL_MODE,
+        name: b"Gain Mode",
+        module: b"Manual",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        automatable: true,
+        stepped: true,
+    },
 ];
 
 /// VST3 metadata corresponding to one shared parameter.
@@ -140,6 +167,8 @@ pub struct GainSnapParams {
     match_request: AtomicU32,
     rms_mode: AtomicU32,
     locked_gain_db: AtomicF32,
+    manual_gain_db: AtomicF32,
+    manual_mode: AtomicU32,
     restart_generation: AtomicU32,
     has_match_result: AtomicU32,
 }
@@ -158,6 +187,8 @@ impl GainSnapParams {
             match_request: AtomicU32::new(0),
             rms_mode: AtomicU32::new(0),
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
+            manual_gain_db: AtomicF32::new(0.0),
+            manual_mode: AtomicU32::new(0),
             restart_generation: AtomicU32::new(0),
             has_match_result: AtomicU32::new(0),
         }
@@ -181,6 +212,14 @@ impl GainSnapParams {
     /// Read the last calculated gain correction in decibels.
     pub fn locked_gain_db(&self) -> f32 {
         sanitize_gain(self.locked_gain_db.load(Ordering::Relaxed))
+    }
+
+    pub fn manual_gain_db(&self) -> f32 {
+        sanitize_manual_gain(self.manual_gain_db.load(Ordering::Relaxed))
+    }
+
+    pub fn manual_mode(&self) -> bool {
+        self.manual_mode.load(Ordering::Relaxed) != 0
     }
 
     /// Request a fresh measurement session without adding a host-visible
@@ -222,6 +261,13 @@ impl GainSnapParams {
             PARAM_LOCKED_GAIN_DB => self
                 .locked_gain_db
                 .store(sanitize_gain(value), Ordering::Relaxed),
+            PARAM_MANUAL_GAIN_DB => self
+                .manual_gain_db
+                .store(sanitize_manual_gain(value), Ordering::Relaxed),
+            PARAM_MANUAL_MODE => self.manual_mode.store(
+                u32::from(value.is_finite() && value >= 0.5),
+                Ordering::Relaxed,
+            ),
             _ => {}
         }
     }
@@ -233,6 +279,8 @@ impl GainSnapParams {
             PARAM_MATCH => Some(f32::from(self.match_requested())),
             PARAM_RMS_MODE => Some(f32::from(self.rms_mode())),
             PARAM_LOCKED_GAIN_DB => Some(self.locked_gain_db()),
+            PARAM_MANUAL_GAIN_DB => Some(self.manual_gain_db()),
+            PARAM_MANUAL_MODE => Some(f32::from(self.manual_mode())),
             _ => None,
         }
     }
@@ -257,6 +305,8 @@ pub fn value_to_text(id: ClapId, value: f64, writer: &mut ParamDisplayWriter) ->
         PARAM_RMS_MODE => write!(writer, "{}", if value >= 0.5 { "RMS" } else { "Peak" }),
         PARAM_MATCH => write!(writer, "{}", if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(writer, "{:+.2} dB", sanitize_gain(value as f32)),
+        PARAM_MANUAL_GAIN_DB => write!(writer, "{:+.2} dB", sanitize_manual_gain(value as f32)),
+        PARAM_MANUAL_MODE => write!(writer, "{}", if value >= 0.5 { "Manual" } else { "Auto" }),
         _ => Ok(()),
     }
 }
@@ -265,7 +315,7 @@ pub fn value_to_text(id: ClapId, value: f64, writer: &mut ParamDisplayWriter) ->
 pub fn text_to_value(id: ClapId, text: &CStr) -> Option<f64> {
     let raw = text.to_str().ok()?.trim();
     match id {
-        PARAM_TARGET_DB | PARAM_LOCKED_GAIN_DB => raw
+        PARAM_TARGET_DB | PARAM_LOCKED_GAIN_DB | PARAM_MANUAL_GAIN_DB => raw
             .trim_end_matches("dB")
             .trim()
             .parse::<f32>()
@@ -274,10 +324,14 @@ pub fn text_to_value(id: ClapId, text: &CStr) -> Option<f64> {
             .map(|value| {
                 if id == PARAM_TARGET_DB {
                     sanitize_target(value) as f64
-                } else {
+                } else if id == PARAM_LOCKED_GAIN_DB {
                     sanitize_gain(value) as f64
+                } else {
+                    sanitize_manual_gain(value) as f64
                 }
             }),
+        PARAM_MANUAL_MODE if raw.eq_ignore_ascii_case("manual") || raw == "1" => Some(1.0),
+        PARAM_MANUAL_MODE if raw.eq_ignore_ascii_case("auto") || raw == "0" => Some(0.0),
         PARAM_RMS_MODE if raw.eq_ignore_ascii_case("rms") || raw == "1" => Some(1.0),
         PARAM_RMS_MODE if raw.eq_ignore_ascii_case("peak") || raw == "0" => Some(0.0),
         PARAM_MATCH
@@ -301,6 +355,10 @@ pub fn format_value_text(id: ClapId, value: f64) -> Option<String> {
         PARAM_RMS_MODE => text.push_str(if value >= 0.5 { "RMS" } else { "Peak" }),
         PARAM_MATCH => text.push_str(if value >= 0.5 { "On" } else { "Off" }),
         PARAM_LOCKED_GAIN_DB => write!(&mut text, "{:+.2} dB", sanitize_gain(value as f32)).ok()?,
+        PARAM_MANUAL_GAIN_DB => {
+            write!(&mut text, "{:+.2} dB", sanitize_manual_gain(value as f32)).ok()?
+        }
+        PARAM_MANUAL_MODE => text.push_str(if value >= 0.5 { "Manual" } else { "Auto" }),
         _ => return None,
     }
     Some(text)
@@ -386,6 +444,24 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
             default_normalized: 0.0,
             automatable: true,
         }),
+        4 => Some(Vst3ParamInfo {
+            id: PARAM_MANUAL_GAIN_DB.get(),
+            title: "Manual Gain",
+            short_title: "Manual Gain",
+            units: "dB",
+            step_count: 0,
+            default_normalized: normalized_from_plain_value(PARAM_MANUAL_GAIN_DB, 0.0)?,
+            automatable: true,
+        }),
+        5 => Some(Vst3ParamInfo {
+            id: PARAM_MANUAL_MODE.get(),
+            title: "Gain Mode",
+            short_title: "Mode",
+            units: "",
+            step_count: 1,
+            default_normalized: 0.0,
+            automatable: true,
+        }),
         _ => None,
     }
 }
@@ -403,6 +479,14 @@ fn sanitize_gain(value: f32) -> f32 {
         value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
     } else {
         DEFAULT_LOCKED_GAIN_DB
+    }
+}
+
+fn sanitize_manual_gain(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB)
+    } else {
+        0.0
     }
 }
 
@@ -433,7 +517,7 @@ mod tests {
     use super::*;
     #[test]
     fn mode_has_a_new_stable_host_id_and_enumerated_values() {
-        assert_eq!(PARAM_DEFS.map(|def| def.id.get()), [1, 2, 3, 4]);
+        assert_eq!(PARAM_DEFS.map(|def| def.id.get()), [1, 2, 3, 4, 5, 6]);
         let params = GainSnapParams::new();
         assert!(!params.rms_mode());
         params.set_param(PARAM_RMS_MODE, 1.0);
@@ -442,6 +526,14 @@ mod tests {
         assert_eq!(text_to_value(PARAM_RMS_MODE, c"Peak"), Some(0.0));
         params.set_param(PARAM_RMS_MODE, f32::NAN);
         assert!(!params.rms_mode());
+        params.set_param(PARAM_MANUAL_GAIN_DB, 48.0);
+        assert_eq!(params.manual_gain_db(), MANUAL_GAIN_MAX_DB);
+        params.set_param(PARAM_MANUAL_GAIN_DB, f32::NAN);
+        assert_eq!(params.manual_gain_db(), 0.0);
+        params.set_param(PARAM_MANUAL_MODE, 1.0);
+        assert!(params.manual_mode());
+        assert_eq!(text_to_value(PARAM_MANUAL_MODE, c"Auto"), Some(0.0));
+        assert_eq!(text_to_value(PARAM_MANUAL_MODE, c"Manual"), Some(1.0));
         #[cfg(feature = "vst3")]
         {
             assert_eq!(vst3_param_info_for_index(3).unwrap().step_count, 1);
@@ -455,6 +547,8 @@ mod tests {
                 format_value_text(PARAM_RMS_MODE, 1.0).as_deref(),
                 Some("RMS")
             );
+            assert!(vst3_param_info_for_index(4).unwrap().automatable);
+            assert_eq!(vst3_param_info_for_index(5).unwrap().step_count, 1);
             assert!(apply_normalized_param_value(&params, PARAM_RMS_MODE, 1.0));
             assert!(params.rms_mode());
         }

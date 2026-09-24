@@ -7,8 +7,8 @@ export PYTHONDONTWRITEBYTECODE=1
 
 slug="gainsnap"
 endpoint="https://portalsurfer.org"
-screenshot_width=208
-screenshot_height=212
+screenshot_width=250
+screenshot_height=424
 screenshot_name="${slug}-default-${screenshot_width}x${screenshot_height}.png"
 mode=""
 channel="stable"
@@ -347,7 +347,7 @@ sys.path.insert(0, str(pathlib.Path("scripts").resolve()))
 from release_helper import build_manifest, canonical_json, validate_preflight_manifest, validate_manifest
 root, publication, package, build, channel, released_at, source, mode, team, clap_notary, vst3_notary, windows_name = sys.argv[1:]
 folder = pathlib.Path(root)
-kwargs = dict(publication_version=publication, package_version=package, build_id=build, channel=channel, released_at=released_at, git_sha=source, clap=folder / f"gainsnap-v{publication}-macos.clap.zip", vst3=folder / f"gainsnap-v{publication}-macos.vst3.zip", screenshot=folder / "gainsnap-default-208x212.png", changelog=folder / "CHANGELOG.md")
+kwargs = dict(publication_version=publication, package_version=package, build_id=build, channel=channel, released_at=released_at, git_sha=source, clap=folder / f"gainsnap-v{publication}-macos.clap.zip", vst3=folder / f"gainsnap-v{publication}-macos.vst3.zip", screenshot=folder / "gainsnap-default-250x424.png", changelog=folder / "CHANGELOG.md")
 if mode == "preflight":
     # validate_preflight_manifest enforces require_production=False.
     manifest = build_manifest(**kwargs, distribution="preflight", signing_identity_class="ad hoc", notarized=False, stapled=False)

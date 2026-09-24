@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn custom_editor_exposes_the_native_platform_and_compact_size() {
+    fn custom_editor_exposes_the_native_platform_and_tall_size() {
         let controller = GainSnapVst3Controller::new();
         assert!(unsafe { controller.createView(ptr::null()) }.is_null());
         let raw = unsafe { controller.createView(ViewType::kEditor) };
@@ -253,7 +253,7 @@ mod tests {
             bottom: 0,
         };
         assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
-        assert_eq!((rect.right, rect.bottom), (208, 212));
+        assert_eq!((rect.right, rect.bottom), (250, 424));
     }
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
 
         // Exercise the real Win32 text commit path as well as host-forwarded
         // editing keys. Give GPUI a frame to install the focused input handler.
-        let target_point = point_for(48.0, 184.0);
+        let target_point = point_for(72.0, 395.0);
         unsafe {
             SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(target_point));
             SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(target_point));

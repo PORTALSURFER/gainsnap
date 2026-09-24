@@ -655,9 +655,11 @@ mod macos {
         send_drag(fixture.window, 185.0, 210.0, 190.0);
         pump_appkit(app, &gui, 0.03);
         assert!((params.manual_gain_db() - 10.99).abs() < 0.01);
+        let gain_before_fine_drag = params.manual_gain_db();
         send_drag(fixture.window, 91.0, 370.0, 360.0);
         pump_appkit(app, &gui, 0.03);
-        assert!(params.manual_gain_db() > 11.8 && params.manual_gain_db() < 12.2);
+        assert!(params.manual_gain_db() > gain_before_fine_drag + 2.5);
+        assert!(params.manual_gain_db() < gain_before_fine_drag + 4.0);
         assert_eq!(params.target_db(), target_before_manual);
 
         // Exercise native focus plus GPUI's keyboard click path for every

@@ -2,29 +2,27 @@
 
 ## Summary
 
-While Match is enabled, GainSnap measures an incoming track peak and continuously
-applies the gain needed to reach a chosen target. Disabling Match holds that
-gain until a louder input would exceed the target, then lowers it. Normalize
-sets the target to 0 dBFS and
-starts Match in one click. The vertical meter shows a smoothed output peak
-in realtime as one thick orange column, with a small dB scale at its left edge.
-A small triangle beside the meter marks the target and acts as the target
-control.
+GainSnap starts with manual Gain at 0 dB. The round knob and right meter arrow
+edit one shared Gain parameter; the knob value accepts direct text entry. Match
+temporarily adjusts that same parameter to the selected Peak or RMS target.
+Stopping Match freezes the gain, with no held rematch. Normalize selects Peak,
+sets the target to 0 dBFS, and starts Match. The tall meter shows output Peak
+and RMS in separate colors, and the left marker sets the target.
 
-Closing or minimizing the editor disables continuous Match. The audio processor
-holds the gain and monitors for output above the target, lowering the gain when
-needed. This uses the existing audio callback without a background task.
+Closing or minimizing the editor disables Match. Saved projects reopen with
+Match off and the last applied gain. The open editor repaints its meters even
+after an initial period of silence.
 
 Match fades playing audio down over 10 ms before a 300 ms fade up. Silent
 starts wait for usable signal. Restarts preserve the currently audible gain. Gain increases
 use a slower 100 ms response than the 10 ms reductions. A stereo-linked sample
 peak guard retains the previous ceiling during the outgoing fade, then caps
-Peak-mode matching and held output at the target, with immediate attack and 100 ms recovery. The fade continues if Match
+Peak-mode matching at the target, with immediate attack and 100 ms recovery. The fade continues if Match
 is disabled early. Output metering includes this protection.
 The startup fade follows the peak guard, bounding strong bursts throughout the
-fade. The 208 × 212 editor groups its controls tightly; a three-stage activity
-rail reports Listening, Adjusting, or Matched below Normalize, with Ready, Held,
-and No signal shown outside those active stages. A short correction telemetry
+fade. The 250 × 424 editor has a three-stage activity rail
+that reports Listening, Adjusting, or Matched while Match runs and Manual after
+it stops. A short correction telemetry
 hold keeps Adjusting visible for about 200 ms. Both macOS and Windows use
 Toybox's embedded GPUI host, including keyboard, focus, and DPI conversion.
 
@@ -46,14 +44,13 @@ final safety net. The output meter shows the latest 300 ms sliding RMS window,
 using the same full-scale-square = 0 dBFS convention. Normalize explicitly
 selects Peak before setting 0 dBFS and engaging Match.
 Peak correction supports up to +120 dB for usable signals above the -120 dBFS
-silence floor; RMS correction retains its +24 dB boost cap. The fixed -24 dB
+silence floor; RMS correction retains its +24 dB boost cap. The fixed -36 dB
 attenuation limit and the existing sample-peak guard still apply.
 
-State version 4 stores the completed-match flag in previously reserved payload
-byte 6, so held monitoring survives processing resets and project reloads.
-Version 3 stores mode in byte 5. Version 1 and 2 projects load in Peak mode.
-Older saved states remain readable and require a fresh completed match before
-held monitoring becomes armed.
+State version 6 stores one applied Gain value and restores Match off. Version 5
+projects migrate the gain selected by their old Auto/Manual mode; versions 1–4
+use their saved matched gain. The former completed-match flag no longer arms
+background monitoring.
 
 ## Constraints
 

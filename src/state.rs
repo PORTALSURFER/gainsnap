@@ -5,11 +5,11 @@ use crate::params::GainSnapParams;
 /// Four-byte GainSnap state marker (`GNSP`).
 pub const STATE_MAGIC: u32 = u32::from_le_bytes(*b"GNSP");
 /// State envelope version written by the toggle matcher.
-pub const STATE_VERSION: u32 = 5;
+pub const STATE_VERSION: u32 = 6;
 /// State envelope version written by the original one-shot matcher.
 pub const LEGACY_STATE_VERSION: u32 = 1;
 /// State envelope versions accepted for loading.
-pub const ACCEPTED_STATE_VERSIONS: &[u32] = &[STATE_VERSION, 4, 3, 2, LEGACY_STATE_VERSION];
+pub const ACCEPTED_STATE_VERSIONS: &[u32] = &[STATE_VERSION, 5, 4, 3, 2, LEGACY_STATE_VERSION];
 
 /// Fixed state payload size in bytes.
 pub const STATE_PAYLOAD_BYTES: usize = 16;
@@ -19,15 +19,13 @@ pub const STATE_PAYLOAD_BYTES: usize = 16;
 pub struct StateSnapshot {
     /// Selected target level in dBFS.
     pub target_db: f32,
-    /// Whether match measurement was enabled when saved.
+    /// Match always restores off; retained for the shared state interface.
     pub match_requested: bool,
-    /// Last calculated gain correction in dB.
+    /// Applied gain in dB.
     pub locked_gain_db: f32,
     /// RMS mode; older projects default to Peak.
     pub rms_mode: bool,
-    /// Whether a completed match arms held-level protection after restore.
-    pub has_match_result: bool,
-    /// User-adjustable gain and mode; absent in states before V5.
+    /// Legacy manual gain and mode; absent in states before V5.
     pub manual_gain_db: f32,
     pub manual_mode: bool,
 }
@@ -36,10 +34,11 @@ pub struct StateSnapshot {
 pub fn encode_payload(params: &GainSnapParams) -> [u8; STATE_PAYLOAD_BYTES] {
     let mut payload = [0_u8; STATE_PAYLOAD_BYTES];
     payload[0..4].copy_from_slice(&params.target_db().to_le_bytes());
-    payload[4] = u8::from(params.match_requested());
+    // A saved project reopens with the last gain in manual mode.
+    payload[4] = 0;
     payload[5] = u8::from(params.rms_mode());
-    payload[6] = u8::from(params.has_match_result());
-    payload[7] = u8::from(params.manual_mode());
+    payload[6] = 0;
+    payload[7] = 0;
     payload[8..12].copy_from_slice(&params.locked_gain_db().to_le_bytes());
     payload[12..16].copy_from_slice(&params.manual_gain_db().to_le_bytes());
     payload
@@ -47,10 +46,9 @@ pub fn encode_payload(params: &GainSnapParams) -> [u8; STATE_PAYLOAD_BYTES] {
 
 /// Decode and validate a fixed-size state payload for a supported version.
 ///
-/// Version one stored a high Match Now value as a one-shot trigger. It must
-/// not reopen a continuous measurement when loaded by the toggle matcher, so
-/// legacy payloads always migrate to Match off while preserving their target
-/// and last locked gain.
+/// Loading any version starts with Match off and preserves the gain that was
+/// audible when the project was saved. V5 stored two gain values; its mode
+/// selects the one to migrate into the single V6 Gain parameter.
 pub fn decode_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
     if !ACCEPTED_STATE_VERSIONS.contains(&version) {
         return None;
@@ -61,7 +59,7 @@ pub fn decode_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
         12
     };
     if payload.len() != expected_len
-        || payload[7] > u8::from(version >= 5)
+        || payload[7] > u8::from(version == 5)
         || payload[6] > u8::from(version >= 4)
         || payload[5] > u8::from(version >= 3)
     {
@@ -81,14 +79,20 @@ pub fn decode_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
     {
         return None;
     }
+    // V5 selected one of two gain stores. V6 has one applied gain, stored in
+    // the old locked-gain slot so old matched projects keep their level.
+    let applied_gain_db = if version == 5 && payload[7] != 0 {
+        manual_gain_db
+    } else {
+        locked_gain_db
+    };
     Some(StateSnapshot {
         target_db,
-        match_requested: version != LEGACY_STATE_VERSION && payload[4] != 0,
+        match_requested: false,
         rms_mode: version >= 3 && payload[5] != 0,
-        locked_gain_db,
-        has_match_result: version >= 4 && payload[6] != 0,
+        locked_gain_db: applied_gain_db,
         manual_gain_db,
-        manual_mode: version >= 5 && payload[7] != 0,
+        manual_mode: false,
     })
 }
 
@@ -101,12 +105,8 @@ pub fn apply_snapshot(params: &GainSnapParams, snapshot: StateSnapshot) {
         f32::from(snapshot.match_requested),
     );
     params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, snapshot.locked_gain_db);
-    params.set_param(crate::params::PARAM_MANUAL_GAIN_DB, snapshot.manual_gain_db);
-    params.set_param(
-        crate::params::PARAM_MANUAL_MODE,
-        f32::from(snapshot.manual_mode),
-    );
-    params.set_has_match_result(snapshot.has_match_result);
+    // The former manual gain and mode are compatibility inputs only.
+    params.set_param(crate::params::PARAM_MANUAL_MODE, 0.0);
 }
 
 #[cfg(test)]
@@ -124,15 +124,14 @@ mod tests {
         assert!(snapshot.rms_mode);
         let restored = GainSnapParams::new();
         apply_snapshot(&restored, snapshot);
-        assert!(restored.rms_mode() && restored.match_requested());
+        assert!(restored.rms_mode() && !restored.match_requested());
         let mut v3 = saved;
         v3[6] = 0;
         let old_rms = decode_payload(3, &v3[..12]).expect("valid version 3 state");
         assert!(old_rms.rms_mode);
-        assert!(!old_rms.has_match_result);
         assert!(decode_payload(2, &saved).is_none());
         apply_snapshot(&restored, decode_payload(2, &old[..12]).unwrap());
-        assert!(!restored.rms_mode() && restored.match_requested());
+        assert!(!restored.rms_mode() && !restored.match_requested());
     }
 
     #[test]
@@ -144,7 +143,7 @@ mod tests {
         let payload = encode_payload(&params);
         let decoded = decode_payload(STATE_VERSION, &payload).expect("valid state");
         assert_eq!(decoded.target_db, -7.5);
-        assert!(decoded.match_requested);
+        assert!(!decoded.match_requested);
         assert_eq!(decoded.locked_gain_db, 5.25);
 
         assert!(decode_payload(STATE_VERSION, &payload[..11]).is_none());
@@ -191,47 +190,56 @@ mod tests {
     }
 
     #[test]
-    fn completed_match_flag_round_trips_but_legacy_state_does_not_arm_it() {
+    fn completed_match_flag_no_longer_arms_background_adjustment() {
         let params = GainSnapParams::new();
-        params.set_has_match_result(true);
         let payload = encode_payload(&params);
-        let decoded = decode_payload(STATE_VERSION, &payload).expect("valid version 5 state");
-        assert!(decoded.has_match_result);
+        let decoded = decode_payload(STATE_VERSION, &payload).expect("valid version 6 state");
+        assert_eq!(payload[6], 0);
 
         let restored = GainSnapParams::new();
         apply_snapshot(&restored, decoded);
-        assert!(restored.has_match_result());
 
         let mut previous = payload;
-        previous[6] = 0;
         for version in [1, 2, 3] {
             let older = decode_payload(version, &previous[..12]).expect("valid older state");
-            assert!(!older.has_match_result);
             apply_snapshot(&restored, older);
-            assert!(!restored.has_match_result());
+        }
+        previous[6] = 1;
+        for version in [4, 5] {
+            let len = if version == 4 {
+                12
+            } else {
+                STATE_PAYLOAD_BYTES
+            };
+            let older = decode_payload(version, &previous[..len]).expect("valid held state");
+            apply_snapshot(&restored, older);
+            assert_eq!(restored.locked_gain_db(), params.locked_gain_db());
         }
     }
 
     #[test]
-    fn manual_state_round_trips_and_v4_defaults_to_auto() {
+    fn v5_mode_migrates_the_effective_gain_into_v6() {
         let params = GainSnapParams::new();
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, -9.0);
-        params.set_param(crate::params::PARAM_MANUAL_GAIN_DB, 7.25);
-        params.set_param(crate::params::PARAM_MANUAL_MODE, 1.0);
-        params.set_has_match_result(true);
         let payload = encode_payload(&params);
+        let mut v5 = payload;
+        v5[4] = 1;
+        v5[7] = 1;
+        v5[12..16].copy_from_slice(&7.25_f32.to_le_bytes());
         let restored = GainSnapParams::new();
-        apply_snapshot(&restored, decode_payload(STATE_VERSION, &payload).unwrap());
-        assert!(restored.manual_mode());
-        assert_eq!(restored.manual_gain_db(), 7.25);
-        assert!(restored.has_match_result());
+        let snapshot = decode_payload(5, &v5).unwrap();
+        assert!(!snapshot.match_requested);
+        apply_snapshot(&restored, snapshot);
+        assert_eq!(restored.locked_gain_db(), 7.25);
+        assert!(!restored.manual_mode());
 
-        let mut v4 = payload;
-        v4[7] = 0;
+        v5[7] = 0;
+        apply_snapshot(&restored, decode_payload(5, &v5).unwrap());
+        assert_eq!(restored.locked_gain_db(), -9.0);
+
+        let v4 = payload;
         apply_snapshot(&restored, decode_payload(4, &v4[..12]).unwrap());
         assert!(!restored.manual_mode());
-        assert_eq!(restored.manual_gain_db(), 0.0);
         assert_eq!(restored.locked_gain_db(), -9.0);
-        assert!(restored.has_match_result());
     }
 }

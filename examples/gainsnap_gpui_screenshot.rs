@@ -252,6 +252,22 @@ mod macos {
         }
     }
 
+    unsafe fn send_double_click(window: id, x: f64, top_y: f64) {
+        let window_number: isize = msg_send![window, windowNumber];
+        let location = NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - top_y);
+        for click_count in [1_isize, 2_isize] {
+            for event_type in [1_usize, 2_usize] {
+                let event: id = msg_send![class!(NSEvent),
+                    mouseEventWithType: event_type
+                    location: location
+                    modifierFlags: 0_u64 timestamp: 0.0_f64 windowNumber: window_number
+                    context: std::ptr::null_mut::<Object>() eventNumber: 1_isize
+                    clickCount: click_count pressure: 1.0_f64];
+                let _: () = msg_send![window, sendEvent: event];
+            }
+        }
+    }
+
     unsafe fn send_drag(window: id, x: f64, start_y: f64, end_y: f64) {
         let window_number: isize = msg_send![window, windowNumber];
         for (event_type, y) in [(1_usize, start_y), (6_usize, end_y), (2_usize, end_y)] {
@@ -368,7 +384,8 @@ mod macos {
         // materialized type before exercising the editor so a failed native
         // assertion cannot leave the user's clipboard changed.
         let _pasteboard_restore = PasteboardRestore::capture();
-        let (mut gui, params) = gainsnap::gui_gpui::new_screenshot_gui_with_params(false, false);
+        let (mut gui, params, status) =
+            gainsnap::gui_gpui::new_screenshot_gui_with_params(false, false);
         gui.set_parent_raw(fixture.parent_handle());
         assert!(gui.open(), "GPUI input fixture should open");
         gui.request_resize(OUTPUT_WIDTH, OUTPUT_HEIGHT);
@@ -377,6 +394,15 @@ mod macos {
             makeFirstResponder: std::ptr::null_mut::<Object>()
         ];
         pump_appkit(app, &gui, 0.1);
+        let silent_meter = gui.capture_rgba().expect("silent meter capture").2;
+        status.update(-18.0, -18.0, 0.0, 0.0, status.state());
+        status.update_rms(-24.0);
+        pump_appkit(app, &gui, 0.2);
+        let active_meter = gui.capture_rgba().expect("active meter capture").2;
+        assert_ne!(
+            silent_meter, active_meter,
+            "meter should update without a click"
+        );
 
         const COMMAND: u64 = 1_u64 << 20;
         const SHIFT: u64 = 1_u64 << 17;
@@ -632,14 +658,11 @@ mod macos {
             "selected arrow still supports dragging"
         );
 
-        // The knob and right marker both edit the same manual gain parameter.
+        // The knob and right marker both edit the same gain parameter.
         let target_before_manual = params.target_db();
         send_click(fixture.window, 185.0, 210.0);
         pump_appkit(app, &gui, 0.03);
-        assert!(
-            params.manual_mode(),
-            "coarse control should enter Manual mode"
-        );
+        assert!(!params.match_requested());
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
         assert_eq!(params.manual_gain_db(), 1.0);
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
@@ -652,20 +675,34 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag(fixture.window, 185.0, 210.0, 190.0);
+        send_drag(fixture.window, 185.0, 185.0, 165.0);
         pump_appkit(app, &gui, 0.03);
-        assert!((params.manual_gain_db() - 10.99).abs() < 0.01);
+        assert!(
+            (params.manual_gain_db() - 10.99).abs() < 0.01,
+            "coarse drag gain {}",
+            params.manual_gain_db()
+        );
         let gain_before_fine_drag = params.manual_gain_db();
         send_drag(fixture.window, 91.0, 370.0, 360.0);
         pump_appkit(app, &gui, 0.03);
-        assert!(params.manual_gain_db() > gain_before_fine_drag + 2.5);
-        assert!(params.manual_gain_db() < gain_before_fine_drag + 4.0);
+        assert!(params.locked_gain_db() > gain_before_fine_drag + 3.0);
+        assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
         assert_eq!(params.target_db(), target_before_manual);
+
+        send_double_click(fixture.window, 185.0, 200.0);
+        pump_appkit(app, &gui, 0.03);
+        let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
+        write_capture(&output_root(), "gain-entry", w, h, pixels);
+        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
+        send_key(app, fixture.window, &gui, "-", 27, 0);
+        send_key(app, fixture.window, &gui, "6", 22, 0);
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.locked_gain_db(), -6.0, "dial text should set gain");
 
         // Exercise native focus plus GPUI's keyboard click path for every
         // action control. A repeated Space keydown must still produce only
         // one keyup click, and modified activation keys must pass through.
-        send_click(fixture.window, 144.0, 85.0);
+        send_click(fixture.window, 144.0, 110.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             params.match_requested(),
@@ -687,7 +724,7 @@ mod macos {
             "Enter should activate the focused Match button"
         );
 
-        send_click(fixture.window, 144.0, 51.0);
+        send_click(fixture.window, 144.0, 76.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.rms_mode(), "native RMS click should activate");
         send_key(app, fixture.window, &gui, "\r", 36, 0);
@@ -696,7 +733,7 @@ mod macos {
             "Enter should activate the focused RMS button"
         );
 
-        send_click(fixture.window, 144.0, 119.0);
+        send_click(fixture.window, 144.0, 144.0);
         pump_appkit(app, &gui, 0.03);
         assert_eq!(
             params.target_db(),

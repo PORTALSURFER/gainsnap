@@ -331,7 +331,7 @@ mod tests {
                     | ((y.mul_add(scale, 0.0) as isize & 0xffff) << 16),
             )
         };
-        let point = point_for(144.0, 85.0);
+        let point = point_for(144.0, 110.0);
         unsafe {
             SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));
             SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
@@ -357,8 +357,8 @@ mod tests {
         );
 
         for (point, rms) in [
-            (point_for(144.0, 51.0), true),
-            (point_for(144.0, 119.0), false),
+            (point_for(144.0, 76.0), true),
+            (point_for(144.0, 144.0), false),
         ] {
             unsafe {
                 SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(point));

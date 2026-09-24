@@ -12,13 +12,13 @@ use toybox::clap::params::{ParamBuilder, ParamSpec};
 pub const PARAM_TARGET_DB: ClapId = ClapId::new(1);
 /// Match measurement toggle parameter identifier.
 pub const PARAM_MATCH: ClapId = ClapId::new(2);
-/// Read-only calculated gain parameter identifier.
+/// Shared manual and Match gain parameter identifier.
 pub const PARAM_LOCKED_GAIN_DB: ClapId = ClapId::new(3);
 /// Peak (0) or RMS (1) matching and metering.
 pub const PARAM_RMS_MODE: ClapId = ClapId::new(4);
-/// User-adjustable gain in Manual mode.
+/// Legacy manual gain alias kept for existing host automation.
 pub const PARAM_MANUAL_GAIN_DB: ClapId = ClapId::new(5);
-/// Auto (0) or Manual (1) gain control.
+/// Legacy gain mode parameter kept for project compatibility.
 pub const PARAM_MANUAL_MODE: ClapId = ClapId::new(6);
 
 /// Lowest supported target level in dBFS.
@@ -28,15 +28,15 @@ pub const TARGET_MAX_DB: f32 = 0.0;
 /// Default target level in dBFS.
 pub const DEFAULT_TARGET_DB: f32 = -12.0;
 /// Lowest gain correction GainSnap can apply.
-pub const GAIN_MIN_DB: f32 = -24.0;
+pub const GAIN_MIN_DB: f32 = -36.0;
 /// Highest peak-mode gain correction GainSnap can apply.
 ///
 /// Inputs at or below the -120 dBFS silence floor are not measured, so this
 /// finite bound covers every usable peak while keeping the stored gain finite.
 pub const GAIN_MAX_DB: f32 = 120.0;
-/// Default applied gain before the first successful match.
+/// Default applied gain.
 pub const DEFAULT_LOCKED_GAIN_DB: f32 = 0.0;
-/// Manual Utility-style gain range in dB.
+/// Legacy manual gain alias range in dB.
 pub const MANUAL_GAIN_MIN_DB: f32 = -36.0;
 pub const MANUAL_GAIN_MAX_DB: f32 = 36.0;
 
@@ -101,12 +101,12 @@ pub const PARAM_DEFS: [ParamDef; 6] = [
     },
     ParamDef {
         id: PARAM_LOCKED_GAIN_DB,
-        name: b"Locked Gain",
-        module: b"Result",
+        name: b"Gain",
+        module: b"Gain",
         min: GAIN_MIN_DB as f64,
         max: GAIN_MAX_DB as f64,
         default: DEFAULT_LOCKED_GAIN_DB as f64,
-        automatable: false,
+        automatable: true,
         stepped: false,
     },
     ParamDef {
@@ -170,7 +170,6 @@ pub struct GainSnapParams {
     manual_gain_db: AtomicF32,
     manual_mode: AtomicU32,
     restart_generation: AtomicU32,
-    has_match_result: AtomicU32,
 }
 
 impl Default for GainSnapParams {
@@ -190,7 +189,6 @@ impl GainSnapParams {
             manual_gain_db: AtomicF32::new(0.0),
             manual_mode: AtomicU32::new(0),
             restart_generation: AtomicU32::new(0),
-            has_match_result: AtomicU32::new(0),
         }
     }
 
@@ -233,17 +231,6 @@ impl GainSnapParams {
         self.restart_generation.load(Ordering::Relaxed)
     }
 
-    /// Whether a completed match has armed the low-cost held-level monitor.
-    pub fn has_match_result(&self) -> bool {
-        self.has_match_result.load(Ordering::Relaxed) != 0
-    }
-
-    /// Preserve completed-match identity across audio runtime recreation.
-    pub fn set_has_match_result(&self, has_result: bool) {
-        self.has_match_result
-            .store(u32::from(has_result), Ordering::Relaxed);
-    }
-
     /// Apply a canonical plain parameter value from a host or editor.
     pub fn set_param(&self, id: ClapId, value: f32) {
         match id {
@@ -258,12 +245,19 @@ impl GainSnapParams {
                 u32::from(value.is_finite() && value >= 0.5),
                 Ordering::Relaxed,
             ),
-            PARAM_LOCKED_GAIN_DB => self
-                .locked_gain_db
-                .store(sanitize_gain(value), Ordering::Relaxed),
-            PARAM_MANUAL_GAIN_DB => self
-                .manual_gain_db
-                .store(sanitize_manual_gain(value), Ordering::Relaxed),
+            PARAM_LOCKED_GAIN_DB => {
+                let gain = sanitize_gain(value);
+                self.locked_gain_db.store(gain, Ordering::Relaxed);
+                self.manual_gain_db
+                    .store(sanitize_manual_gain(gain), Ordering::Relaxed);
+            }
+            // Keep the old automatable parameter as an alias for existing
+            // projects. New editor gestures use the full-range Gain value.
+            PARAM_MANUAL_GAIN_DB => {
+                let gain = sanitize_manual_gain(value);
+                self.manual_gain_db.store(gain, Ordering::Relaxed);
+                self.locked_gain_db.store(gain, Ordering::Relaxed);
+            }
             PARAM_MANUAL_MODE => self.manual_mode.store(
                 u32::from(value.is_finite() && value >= 0.5),
                 Ordering::Relaxed,
@@ -425,7 +419,7 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
         }),
         2 => Some(Vst3ParamInfo {
             id: PARAM_LOCKED_GAIN_DB.get(),
-            title: "Locked Gain",
+            title: "Gain",
             short_title: "Gain",
             units: "dB",
             step_count: 0,
@@ -433,7 +427,7 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
                 PARAM_LOCKED_GAIN_DB,
                 DEFAULT_LOCKED_GAIN_DB as f64,
             )?,
-            automatable: false,
+            automatable: true,
         }),
         3 => Some(Vst3ParamInfo {
             id: PARAM_RMS_MODE.get(),
@@ -538,7 +532,7 @@ mod tests {
         {
             assert_eq!(vst3_param_info_for_index(3).unwrap().step_count, 1);
             let gain_info = vst3_param_info_for_index(2).unwrap();
-            assert!((gain_info.default_normalized - 1.0 / 6.0).abs() < 1.0e-12);
+            assert!((gain_info.default_normalized - 36.0 / 156.0).abs() < 1.0e-12);
             assert_eq!(
                 gain_info.default_normalized,
                 normalized_from_plain_value(PARAM_LOCKED_GAIN_DB, 0.0).unwrap()

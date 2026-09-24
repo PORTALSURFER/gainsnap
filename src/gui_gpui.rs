@@ -24,8 +24,8 @@ use toybox::gpui_gui::{
 
 use crate::clap_plugin::HostParamRequester;
 use crate::params::{
-    MANUAL_GAIN_MAX_DB, MANUAL_GAIN_MIN_DB, PARAM_MANUAL_GAIN_DB, PARAM_MANUAL_MODE, PARAM_MATCH,
-    PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB,
+    GAIN_MAX_DB, GAIN_MIN_DB, PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB,
+    TARGET_MAX_DB, TARGET_MIN_DB,
 };
 use crate::status::{GuiStatus, MatchActivity, MatchState};
 
@@ -89,6 +89,8 @@ const METER_SETTLE_EPSILON_DB: f32 = 0.01;
 const TARGET_KEYBOARD_STEP_DB: f32 = 1.0;
 const TARGET_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
 const GAIN_MARKER_NEUTRAL_DB: f32 = -12.0;
+const GAIN_MARKER_HIGH_DB: f32 = 36.0;
+const GAIN_MARKER_HIGH_LEVEL_DB: f32 = -3.0;
 const SURFACE_PADDING_X: f32 = 16.0;
 const SURFACE_PADDING_Y: f32 = 15.0;
 const SURFACE_COLUMN_GAP: f32 = 12.0;
@@ -186,6 +188,18 @@ fn parse_target_text(text: &str) -> Option<f32> {
         .then(|| value.clamp(TARGET_RANGE.min, TARGET_RANGE.max))
 }
 
+fn format_gain_text(value: f32) -> String {
+    format!("{value:+.1}")
+}
+
+fn parse_gain_text(text: &str) -> Option<f32> {
+    let raw = text.trim().strip_suffix("dB").unwrap_or(text.trim()).trim();
+    let value = raw.parse::<f32>().ok()?;
+    value
+        .is_finite()
+        .then(|| value.clamp(GAIN_MIN_DB, GAIN_MAX_DB))
+}
+
 fn clamp_fraction(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
@@ -229,8 +243,7 @@ struct DisplaySnapshot {
     rms_mode: bool,
     output_peak_db: u32,
     output_rms_db: u32,
-    manual_gain_db: u32,
-    manual_mode: bool,
+    gain_db: u32,
     state: MatchState,
     activity: MatchActivity,
 }
@@ -247,8 +260,7 @@ impl DisplaySnapshot {
             rms_mode: params.rms_mode(),
             output_peak_db: sanitize_meter_level_db(status.output_peak_db()).to_bits(),
             output_rms_db: sanitize_meter_level_db(status.output_rms_db()).to_bits(),
-            manual_gain_db: params.manual_gain_db().to_bits(),
-            manual_mode: params.manual_mode(),
+            gain_db: params.locked_gain_db().to_bits(),
             state: status.state(),
             activity: status.activity(),
         }
@@ -308,31 +320,27 @@ impl EditorController {
 
     fn manual_gain_db(&self) -> f32 {
         self.parameter_value(
-            PARAM_MANUAL_GAIN_DB,
+            PARAM_LOCKED_GAIN_DB,
             ParamRange {
-                min: MANUAL_GAIN_MIN_DB,
-                max: MANUAL_GAIN_MAX_DB,
+                min: GAIN_MIN_DB,
+                max: GAIN_MAX_DB,
                 default: 0.0,
             },
         )
     }
 
     fn set_manual_gain_db(&self, gain_db: f32) {
-        self.begin(PARAM_MANUAL_GAIN_DB);
+        self.begin(PARAM_LOCKED_GAIN_DB);
         self.value(
-            PARAM_MANUAL_GAIN_DB,
-            gain_db.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB),
+            PARAM_LOCKED_GAIN_DB,
+            gain_db.clamp(GAIN_MIN_DB, GAIN_MAX_DB),
         );
-        self.end(PARAM_MANUAL_GAIN_DB);
+        self.end(PARAM_LOCKED_GAIN_DB);
     }
 
     fn activate_manual(&self) {
-        if !self.params.manual_mode() {
-            self.set_manual_gain_db(self.params.locked_gain_db());
-            self.toggle_value(PARAM_MANUAL_MODE, true);
-            if self.params.match_requested() {
-                self.toggle_value(PARAM_MATCH, false);
-            }
+        if self.params.match_requested() {
+            self.toggle_value(PARAM_MATCH, false);
         }
     }
 
@@ -443,7 +451,6 @@ impl EditorController {
     }
 
     fn normalize(&mut self) -> String {
-        self.toggle_value(PARAM_MANUAL_MODE, false);
         self.toggle_value(PARAM_RMS_MODE, false);
         self.set_target_db(TARGET_MAX_DB);
         self.toggle_value(PARAM_MATCH, true);
@@ -503,6 +510,7 @@ impl EditorController {
 pub(crate) struct GainSnapEditor {
     controller: EditorController,
     target_input: Entity<NumericInput>,
+    gain_input: Entity<NumericInput>,
     #[allow(dead_code)]
     target_text_subscription: Subscription,
     #[allow(dead_code)]
@@ -511,9 +519,16 @@ pub(crate) struct GainSnapEditor {
     target_cancel_subscription: Subscription,
     #[allow(dead_code)]
     target_step_subscription: Subscription,
+    #[allow(dead_code)]
+    gain_text_subscription: Subscription,
+    #[allow(dead_code)]
+    gain_submit_subscription: Subscription,
+    #[allow(dead_code)]
+    gain_cancel_subscription: Subscription,
+    #[allow(dead_code)]
+    gain_step_subscription: Subscription,
     meter_focus_handle: FocusHandle,
     knob_focus_handle: FocusHandle,
-    gain_mode_focus_handle: FocusHandle,
     mode_focus_handle: FocusHandle,
     match_focus_handle: FocusHandle,
     restart_focus_handle: FocusHandle,
@@ -548,7 +563,7 @@ impl GainSnapEditor {
             TARGET_FINE_KEYBOARD_STEP_DB,
             format_target_text,
         )
-        .with_style(target_style);
+        .with_style(target_style.clone());
         let target_input = cx.new(move |cx| NumericInput::new(target_config, cx));
         let target_text_subscription =
             cx.subscribe(&target_input, |view, _, event: &NumericInputChanged, cx| {
@@ -576,18 +591,58 @@ impl GainSnapEditor {
                 view.set_target_text_force(view.controller.target_text(), cx);
                 cx.notify();
             });
+        let gain_config = NumericInputConfig::new(
+            controller.manual_gain_db(),
+            NumericInputRange::new(GAIN_MIN_DB, GAIN_MAX_DB),
+            1.0,
+            0.1,
+            format_gain_text,
+        )
+        .with_style(target_style);
+        let gain_input = cx.new(move |cx| NumericInput::new(gain_config, cx));
+        let gain_text_subscription =
+            cx.subscribe(&gain_input, |view, _, event: &NumericInputChanged, cx| {
+                view.apply_gain_text(&event.text, false, cx);
+            });
+        let gain_submit_subscription =
+            cx.subscribe(&gain_input, |view, _, event: &NumericInputSubmitted, cx| {
+                view.apply_gain_text(&event.text, true, cx);
+            });
+        let gain_cancel_subscription =
+            cx.subscribe(&gain_input, |view, input, _: &NumericInputCanceled, cx| {
+                input.update(cx, |input, cx| {
+                    input.set_text(format_gain_text(view.controller.manual_gain_db()), cx)
+                });
+                cx.notify();
+            });
+        let gain_step_subscription =
+            cx.subscribe(&gain_input, |view, _, event: &NumericInputStepped, cx| {
+                view.controller.activate_manual();
+                view.controller
+                    .set_manual_gain_db(view.controller.manual_gain_db() + event.delta);
+                let gain_db = view.controller.manual_gain_db();
+                view.gain_input.update(cx, |input, cx| {
+                    input.set_value(gain_db, cx);
+                    input.set_text(format_gain_text(gain_db), cx);
+                });
+                cx.notify();
+            });
         let last_display_snapshot =
             DisplaySnapshot::capture(&controller.params, &controller.status);
         Self {
             controller,
             target_input,
+            gain_input,
             target_text_subscription,
             target_submit_subscription,
             target_cancel_subscription,
             target_step_subscription,
+            gain_text_subscription,
+            gain_submit_subscription,
+            gain_cancel_subscription,
+            gain_step_subscription,
             meter_focus_handle: cx.focus_handle(),
             knob_focus_handle: cx.focus_handle(),
-            gain_mode_focus_handle: cx.focus_handle(),
             mode_focus_handle: cx.focus_handle(),
             match_focus_handle: cx.focus_handle(),
             restart_focus_handle: cx.focus_handle(),
@@ -615,6 +670,21 @@ impl GainSnapEditor {
         cx.notify();
     }
 
+    fn apply_gain_text(&mut self, text: &str, submitted: bool, cx: &mut Context<Self>) {
+        if let Some(gain_db) = parse_gain_text(text) {
+            self.controller.activate_manual();
+            self.controller.set_manual_gain_db(gain_db);
+        }
+        if submitted {
+            let gain_db = self.controller.manual_gain_db();
+            self.gain_input.update(cx, |input, cx| {
+                input.set_value(gain_db, cx);
+                input.set_text(format_gain_text(gain_db), cx);
+            });
+        }
+        cx.notify();
+    }
+
     fn set_target_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.target_input.update(cx, |input, cx| {
             input.set_value(self.controller.target_db(), cx);
@@ -638,7 +708,6 @@ impl GainSnapEditor {
         cx: &mut Context<Self>,
     ) {
         let button_focused = self.mode_focus_handle.is_focused(window)
-            || self.gain_mode_focus_handle.is_focused(window)
             || self.match_focus_handle.is_focused(window)
             || self.restart_focus_handle.is_focused(window)
             || self.normalize_focus_handle.is_focused(window);
@@ -804,8 +873,19 @@ impl GainSnapEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.knob_focus_handle, cx);
         self.controller.activate_manual();
+        if event.click_count >= 2 {
+            self.knob_dragging = false;
+            let gain_db = self.controller.manual_gain_db();
+            self.gain_input.update(cx, |input, cx| {
+                input.set_value(gain_db, cx);
+                input.set_editing(true, cx);
+            });
+            window.focus(&self.gain_input.read(cx).focus_handle(), cx);
+            cx.notify();
+            return;
+        }
+        window.focus(&self.knob_focus_handle, cx);
         self.knob_dragging = true;
         self.knob_drag_start_y = f32::from(event.position.y);
         self.knob_drag_start_gain_db = self.controller.manual_gain_db();
@@ -826,15 +906,6 @@ impl GainSnapEditor {
         self.knob_dragging = false;
     }
 
-    fn toggle_gain_mode(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.controller.params.manual_mode() {
-            self.controller.toggle_value(PARAM_MANUAL_MODE, false);
-        } else {
-            self.controller.activate_manual();
-        }
-        cx.notify();
-    }
-
     fn toggle_mode(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.controller
             .toggle_value(PARAM_RMS_MODE, !self.controller.params.rms_mode());
@@ -842,9 +913,6 @@ impl GainSnapEditor {
     }
 
     fn toggle_match(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.controller.params.manual_mode() {
-            self.controller.toggle_value(PARAM_MANUAL_MODE, false);
-        }
         self.controller
             .toggle_value(PARAM_MATCH, !self.controller.params.match_requested());
         cx.notify();
@@ -869,11 +937,14 @@ impl GainSnapEditor {
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
-        let meter_changed = self.controller.advance_meter_at(now);
-        let pulse_changed = self.controller.advance_pulse_at(now);
+        self.controller.advance_meter_at(now);
+        self.controller.advance_pulse_at(now);
         let snapshot = DisplaySnapshot::capture(&self.controller.params, &self.controller.status);
         if snapshot != self.last_display_snapshot {
             self.last_display_snapshot = snapshot;
+            let gain_db = self.controller.manual_gain_db();
+            self.gain_input
+                .update(cx, |input, cx| input.set_value(gain_db, cx));
             if let Some(text) = self
                 .controller
                 .sync_target_text(self.controller.target_db())
@@ -882,13 +953,9 @@ impl GainSnapEditor {
             }
             cx.notify();
         }
-        if meter_changed
-            || pulse_changed
-            || self.controller.meter_needs_realtime_redraw()
-            || self.controller.params.match_requested()
-        {
-            window.request_animation_frame();
-        }
+        // The host can begin processing after the first editor paint. Keep
+        // sampling telemetry while the editor is open, even after silence.
+        window.request_animation_frame();
     }
 }
 
@@ -904,13 +971,7 @@ impl Render for GainSnapEditor {
         let gain_marker_selected = self.gain_marker_selected;
         let mode_rms = self.controller.params.rms_mode();
         let match_requested = self.controller.params.match_requested();
-        let manual_mode = self.controller.params.manual_mode();
         let manual_gain_db = self.controller.manual_gain_db();
-        let active_gain_db = if manual_mode {
-            manual_gain_db
-        } else {
-            self.controller.params.locked_gain_db()
-        };
         let pulse_alpha = self.controller.pulse_alpha;
         let match_activity = self.controller.status.activity();
         let target_input = self.target_input.clone();
@@ -918,7 +979,7 @@ impl Render for GainSnapEditor {
             target_db,
             output_peak_db,
             output_rms_db,
-            gain_db: active_gain_db,
+            gain_db: manual_gain_db,
             focused: meter_focused,
             gain_selected: gain_marker_selected,
         };
@@ -987,15 +1048,6 @@ impl Render for GainSnapEditor {
             (ACTION_CONTROL_WIDTH, 24.0),
             &self.mode_focus_handle,
             cx.listener(Self::toggle_mode),
-        );
-        let gain_mode = button_element(
-            "gain-mode",
-            if manual_mode { "MANUAL" } else { "AUTO" },
-            manual_mode,
-            true,
-            (ACTION_CONTROL_WIDTH, 24.0),
-            &self.gain_mode_focus_handle,
-            cx.listener(Self::toggle_gain_mode),
         );
         let match_button = button_element(
             "match-now",
@@ -1084,13 +1136,12 @@ impl Render for GainSnapEditor {
             .on_mouse_move(cx.listener(Self::knob_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::knob_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::knob_mouse_up))
-            .child(format!("{manual_gain_db:+.1}"));
+            .child(div().w(px(58.0)).h(px(22.0)).child(self.gain_input.clone()));
         let manual_control = div()
             .flex()
             .flex_col()
             .items_center()
             .gap(px(9.0))
-            .child(gain_mode)
             .child(knob)
             .child(
                 div()
@@ -1148,18 +1199,14 @@ impl Render for GainSnapEditor {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(if manual_mode {
-                solid(TEXT_PRIMARY)
-            } else {
-                activity_label_color(match_activity)
-            })
+            .text_color(activity_label_color(match_activity))
             .font(font("Ioskeley Mono"))
             .text_size(px(11.0))
             .line_height(px(12.0))
-            .child(if manual_mode {
-                "Manual"
-            } else {
+            .child(if match_requested {
                 activity_label_text(match_activity)
+            } else {
+                "Manual"
             });
         let activity_status = div()
             .flex()
@@ -1380,23 +1427,30 @@ fn target_level_fraction(db: f32) -> f32 {
 // Place unity gain at -12 dB on the meter, with room to move the handle
 // in either direction across the full manual gain range.
 fn gain_marker_level_db(gain_db: f32) -> f32 {
-    let gain_db = gain_db.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB);
-    if gain_db >= 0.0 {
+    let gain_db = gain_db.clamp(GAIN_MIN_DB, GAIN_MAX_DB);
+    if gain_db > GAIN_MARKER_HIGH_DB {
+        GAIN_MARKER_HIGH_LEVEL_DB
+            + (gain_db - GAIN_MARKER_HIGH_DB) * (TARGET_MAX_DB - GAIN_MARKER_HIGH_LEVEL_DB)
+                / (GAIN_MAX_DB - GAIN_MARKER_HIGH_DB)
+    } else if gain_db >= 0.0 {
         GAIN_MARKER_NEUTRAL_DB
-            + gain_db * (TARGET_MAX_DB - GAIN_MARKER_NEUTRAL_DB) / MANUAL_GAIN_MAX_DB
+            + gain_db * (GAIN_MARKER_HIGH_LEVEL_DB - GAIN_MARKER_NEUTRAL_DB) / GAIN_MARKER_HIGH_DB
     } else {
-        GAIN_MARKER_NEUTRAL_DB
-            + gain_db * (GAIN_MARKER_NEUTRAL_DB - TARGET_MIN_DB) / -MANUAL_GAIN_MIN_DB
+        GAIN_MARKER_NEUTRAL_DB + gain_db * (GAIN_MARKER_NEUTRAL_DB - TARGET_MIN_DB) / -GAIN_MIN_DB
     }
 }
 
 fn gain_from_marker_level_db(level_db: f32) -> f32 {
     let level_db = level_db.clamp(TARGET_MIN_DB, TARGET_MAX_DB);
-    if level_db >= GAIN_MARKER_NEUTRAL_DB {
-        (level_db - GAIN_MARKER_NEUTRAL_DB) * MANUAL_GAIN_MAX_DB
-            / (TARGET_MAX_DB - GAIN_MARKER_NEUTRAL_DB)
+    if level_db > GAIN_MARKER_HIGH_LEVEL_DB {
+        GAIN_MARKER_HIGH_DB
+            + (level_db - GAIN_MARKER_HIGH_LEVEL_DB) * (GAIN_MAX_DB - GAIN_MARKER_HIGH_DB)
+                / (TARGET_MAX_DB - GAIN_MARKER_HIGH_LEVEL_DB)
+    } else if level_db >= GAIN_MARKER_NEUTRAL_DB {
+        (level_db - GAIN_MARKER_NEUTRAL_DB) * GAIN_MARKER_HIGH_DB
+            / (GAIN_MARKER_HIGH_LEVEL_DB - GAIN_MARKER_NEUTRAL_DB)
     } else {
-        (level_db - GAIN_MARKER_NEUTRAL_DB) * -MANUAL_GAIN_MIN_DB
+        (level_db - GAIN_MARKER_NEUTRAL_DB) * -GAIN_MIN_DB
             / (GAIN_MARKER_NEUTRAL_DB - TARGET_MIN_DB)
     }
 }
@@ -1644,6 +1698,7 @@ pub fn new_screenshot_gui_with_params(
 ) -> (
     toybox::gpui_gui::GpuiHostedGui,
     Arc<crate::params::GainSnapParams>,
+    Arc<GuiStatus>,
 ) {
     let params = Arc::new(crate::params::GainSnapParams::new());
     params.set_param(PARAM_MATCH, f32::from(matching));
@@ -1663,11 +1718,11 @@ pub fn new_screenshot_gui_with_params(
         "GainSnapGpuiScreenshotView",
         Arc::clone(&params),
         Arc::new(AutomationQueue::default()),
-        status,
+        Arc::clone(&status),
         None,
         None,
     );
-    (gui, params)
+    (gui, params, status)
 }
 
 /// Construct the GPUI host facade with a format-specific parameter sink.
@@ -1765,11 +1820,12 @@ mod tests {
     #[test]
     fn gain_marker_starts_at_minus_twelve_and_covers_manual_range() {
         for (gain_db, marker_db) in [
-            (MANUAL_GAIN_MIN_DB, TARGET_MIN_DB),
+            (GAIN_MIN_DB, TARGET_MIN_DB),
             (-18.0, -24.0),
             (0.0, GAIN_MARKER_NEUTRAL_DB),
-            (18.0, -6.0),
-            (MANUAL_GAIN_MAX_DB, TARGET_MAX_DB),
+            (18.0, -7.5),
+            (GAIN_MARKER_HIGH_DB, GAIN_MARKER_HIGH_LEVEL_DB),
+            (GAIN_MAX_DB, TARGET_MAX_DB),
         ] {
             assert!((gain_marker_level_db(gain_db) - marker_db).abs() < 0.001);
             assert!((gain_from_marker_level_db(marker_db) - gain_db).abs() < 0.001);

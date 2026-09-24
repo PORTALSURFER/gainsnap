@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn clap_off_event_at_nonzero_offset_finalizes_then_protects_louder_audio() {
+    fn clap_off_event_at_nonzero_offset_freezes_gain_before_louder_audio() {
         let source = [parameter_event(0, 1.0), parameter_event(512, 0.0)];
         let input = InputEvents::from_buffer(&source);
         let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
@@ -609,7 +609,7 @@ mod tests {
         run_timeline(&mut timeline, &params, &mut engine, &samples);
 
         assert_eq!(engine.report().state, MatchState::Locked);
-        let expected = 20.0 * (crate::dsp::db_to_linear(params.target_db()) / 0.9).log10();
+        let expected = 20.0 * (crate::dsp::db_to_linear(params.target_db()) / 0.25).log10();
         assert!((engine.report().locked_gain_db - expected).abs() < 0.02);
     }
 

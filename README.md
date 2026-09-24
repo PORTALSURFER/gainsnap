@@ -6,13 +6,11 @@ AudioDev plug-in repository (gainsnap), category **Utility**.
 
 ## Development
 
-While Match is enabled, GainSnap measures a stereo track's finite sample peak
-and applies the bounded gain correction needed to reach the selected target.
-Peak mode remembers the highest sample peak for the current Match session;
-quieter passages never raise the gain, and louder peaks lower it. Disabling
-Match holds that correction unless a louder input exceeds the target, when it
-reduces the held gain. The Normalize button sets the target to 0 dBFS
-and starts Match in one click.
+GainSnap starts as a manual gain utility. The knob and right meter arrow edit the
+same Gain parameter. While Match is enabled, GainSnap measures the input and
+adjusts that parameter toward the selected target. Turning Match off freezes
+the setting: later upstream level changes do not rematch. The Normalize button
+sets the target to 0 dBFS and starts Match in one click.
 Shared host and GUI mechanics remain in Toybox.
 
 The PEAK/RMS button selects the matching measurement and output meter. Peak
@@ -40,7 +38,7 @@ pressed. A newly louder upstream peak automatically lowers the matched gain;
 use Restart to discard the old maximum when upstream audio becomes quieter.
 RMS mode retains its rolling adaptation behavior and may take
 roughly 3–4 seconds of steady material to respond.
-Peak targets that would require more than −24 dB attenuation or +120 dB boost
+Peak targets that would require more than −36 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
 matching retains its +24 dB boost cap and peak-headroom protection. The meter
 always shows the actual protected output. Normalize switches to PEAK, sets 0
@@ -55,8 +53,8 @@ higher-precision smoothing at high sample rates.
 
 A stereo-linked sample-peak guard reacts immediately to bursts and recovers over
 100 ms. The short outgoing transition retains its previous ceiling while fading
-down; the Peak-mode path remains capped at the selected target after Match is
-held. Turning Match off early lets the transition finish.
+down; the Peak-mode path remains capped at the selected target while Match is
+active. Turning Match off early lets the transition finish.
 Protection adds no latency, and the meter includes its attenuation.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
@@ -65,18 +63,17 @@ the meter accepts direct dBFS entry as well.
 
 The tall meter shows the output peak in orange and RMS in teal, with numeric
 readouts beside it. The left arrow and horizontal line set the target. Select
-Peak or RMS to choose which level Match uses. In Manual mode, drag the round
-gain control vertically for coarse adjustments or drag the right meter arrow
-for fine adjustments. At 0 dB gain, the right arrow sits at the meter's −12 dB
-mark and can move up or down across the manual gain range. Arrow keys adjust a
-focused control; Shift makes smaller steps. Using either gain control enters
-Manual mode. Match and Normalize return
-to Auto mode. Manual gain remains fixed when upstream audio gets louder; the
-sample-peak guard still prevents output above 0 dBFS. The default editor is
+Peak or RMS to choose which level Match uses. Drag the round gain control from
+its outer ring for coarse adjustments, or drag the right meter arrow for fine
+adjustments. The arrow sits at −12 dB when Gain is 0 dB and stays independent
+of the moving meter bars. Double-click the value in the knob to type a gain in
+dB. Arrow keys adjust a focused control; Shift makes smaller steps. Editing
+either gain control stops Match. The sample-peak guard still prevents output
+above 0 dBFS. The default editor is
 250 × 424 logical pixels. The activity rail below Normalize has three short
 stages: Listening, Adjusting, and Matched. It reports live audio activity
-independently of the Match lifecycle; disabled instances show Ready, Held, or
-No signal. Matched means the correction has settled within the available gain
+independently of the Match lifecycle; when Match is off, it shows Manual.
+Matched means the correction has settled within the available gain
 and peak-headroom limits, so an unreachable target can still settle at the
 closest protected level. After a correction or peak-guard event, the telemetry
 keeps Adjusting visible for about 200 ms so short gain changes remain legible
@@ -130,6 +127,6 @@ site/product.json is the release/catalog contract and site/landing-page.json is 
 
 The credentials stage handles only the listed ordinary GitHub Actions entries through hidden stdin prompts or the execute-only Apple .p12/.p8 path options; it never persists or logs values and never handles server-side SSH/deploy credentials. Supplied files are checked as regular files with the expected extension and a bounded size, encoded in memory after the confirmation gate, and sent only through gh standard input. The per-product PortalSurfer release credential belongs to the publisher stage. The pinned PORTALSURFER/toybox and GPUI dependencies are public, so no repository credential is required. See docs/RELEASE_CREDENTIALS.md and docs/RELEASE_PUBLISHER.md for the exact contracts.
 
-Match switches off when the plug-in editor is closed, hidden, or minimized. The audio processor holds the last match and checks for a level increase that would exceed the target. It lowers the held gain only when needed, without running continuous matching history or GUI polling. Reopen the editor to inspect or restart the match.
-Completed matches remain protected after a host processing restart or a saved
-project is reopened. Untouched instances and older saved states begin unarmed.
+Match switches off when the plug-in editor is closed, hidden, or minimized.
+Stopped matches and saved projects keep their gain without background matching.
+The meter updates while the editor is open, including when Match is off.

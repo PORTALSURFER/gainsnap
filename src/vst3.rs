@@ -7,7 +7,7 @@ use toybox::vst3::prelude::*;
 
 use crate::state::{
     apply_snapshot, decode_payload, StateSnapshot, ACCEPTED_STATE_VERSIONS, STATE_MAGIC,
-    STATE_PAYLOAD_BYTES, STATE_VERSION,
+    STATE_VERSION,
 };
 
 mod controller;
@@ -48,9 +48,6 @@ unsafe fn write_vst3_state(stream: *mut IBStream, shared: &GainSnapVst3Shared) -
 }
 
 fn decode_vst3_state_payload(version: u32, payload: &[u8]) -> Option<StateSnapshot> {
-    if payload.len() != STATE_PAYLOAD_BYTES {
-        return None;
-    }
     decode_payload(version, payload)
 }
 
@@ -103,8 +100,9 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         params.set_param(PARAM_LOCKED_GAIN_DB, 5.25);
         let payload = encode_payload(&params);
-        let encoded = try_encode_versioned_payload(STATE_MAGIC, LEGACY_STATE_VERSION, &payload)
-            .expect("legacy VST3 state should encode");
+        let encoded =
+            try_encode_versioned_payload(STATE_MAGIC, LEGACY_STATE_VERSION, &payload[..12])
+                .expect("legacy VST3 state should encode");
         let versioned = decode_versioned_payload(&encoded, STATE_MAGIC, ACCEPTED_STATE_VERSIONS)
             .expect("legacy VST3 state should be accepted");
 

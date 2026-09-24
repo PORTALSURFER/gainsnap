@@ -277,12 +277,14 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
         shared: &'a GainSnapShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
+        let mut engine = GainSnapEngine::new(
+            audio_config.sample_rate as f32,
+            shared.params.locked_gain_db(),
+        );
+        engine.reset(&shared.params);
         Ok(Self {
             shared,
-            engine: GainSnapEngine::new(
-                audio_config.sample_rate as f32,
-                shared.params.locked_gain_db(),
-            ),
+            engine,
             timeline: BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY),
             overflow_final: [None; CLAP_PARAMETER_COUNT],
             automation_drain: AutomationDrainBuffer::default(),
@@ -537,8 +539,13 @@ mod tests {
         let mut encoded = Vec::new();
         {
             let mut output = OutputStream::from_writer(&mut encoded);
-            write_versioned_payload(&mut output, STATE_MAGIC, LEGACY_STATE_VERSION, &payload)
-                .expect("legacy CLAP state should encode");
+            write_versioned_payload(
+                &mut output,
+                STATE_MAGIC,
+                LEGACY_STATE_VERSION,
+                &payload[..12],
+            )
+            .expect("legacy CLAP state should encode");
         }
         let mut cursor = Cursor::new(encoded);
         let mut input = InputStream::from_reader(&mut cursor);

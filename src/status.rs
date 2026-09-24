@@ -162,16 +162,6 @@ impl GuiStatus {
             .store(sanitize_db(db).to_bits(), Ordering::Relaxed);
     }
 
-    /// Read the selected output measurement for the editor.
-    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
-    pub fn output_level_db(&self, rms: bool) -> f32 {
-        if rms {
-            read_f32(&self.output_rms_db)
-        } else {
-            self.output_peak_db()
-        }
-    }
-
     /// Read the most recent input peak in decibels.
     #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     #[allow(dead_code)]
@@ -183,6 +173,12 @@ impl GuiStatus {
     #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
     pub fn output_peak_db(&self) -> f32 {
         read_f32(&self.output_peak_db)
+    }
+
+    /// Read the most recent output RMS in decibels.
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
+    pub fn output_rms_db(&self) -> f32 {
+        read_f32(&self.output_rms_db)
     }
 
     /// Read the held gain in decibels.

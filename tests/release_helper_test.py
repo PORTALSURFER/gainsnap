@@ -23,7 +23,7 @@ CLAP_NOTARY_ID = "12345678-1234-4123-8123-123456789abc"
 VST3_NOTARY_ID = "abcdefab-cdef-4abc-8def-abcdefabcdef"
 
 
-def png(width: int = 208, height: int = 212) -> bytes:
+def png(width: int = 250, height: int = 424) -> bytes:
     def chunk(kind: bytes, payload: bytes) -> bytes:
         return (
             struct.pack(">I", len(payload))
@@ -59,7 +59,7 @@ class FakeTransport:
 
 
 def write_support_files(root: Path) -> tuple[Path, Path]:
-    screenshot = root / "gainsnap-default-208x212.png"
+    screenshot = root / "gainsnap-default-250x424.png"
     screenshot.write_bytes(png())
     changelog = root / "CHANGELOG.md"
     changelog.write_text("# GainSnap release\n", encoding="utf-8")
@@ -428,7 +428,7 @@ class ReleaseHelperTests(unittest.TestCase):
                 [
                     "gainsnap-v0.1.0-macos.clap.zip",
                     "gainsnap-v0.1.0-macos.vst3.zip",
-                    "gainsnap-default-208x212.png",
+                    "gainsnap-default-250x424.png",
                     "CHANGELOG.md",
                 ],
             )

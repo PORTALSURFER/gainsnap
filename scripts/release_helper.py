@@ -56,9 +56,9 @@ NIGHTLY_VERSION = re.compile(
 )
 WORKFLOW_SEQUENCE = re.compile(r"[1-9][0-9]*\Z")
 GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
-SCREENSHOT_WIDTH = 208
-SCREENSHOT_HEIGHT = 212
-SCREENSHOT_FILENAME = "gainsnap-default-208x212.png"
+SCREENSHOT_WIDTH = 250
+SCREENSHOT_HEIGHT = 424
+SCREENSHOT_FILENAME = "gainsnap-default-250x424.png"
 SCREENSHOT_NAME = re.compile(r"gainsnap-default-[0-9]+x[0-9]+\.png\Z")
 
 

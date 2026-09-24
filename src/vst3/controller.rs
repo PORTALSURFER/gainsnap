@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn custom_editor_exposes_the_native_platform_and_compact_size() {
+    fn custom_editor_exposes_the_native_platform_and_tall_size() {
         let controller = GainSnapVst3Controller::new();
         assert!(unsafe { controller.createView(ptr::null()) }.is_null());
         let raw = unsafe { controller.createView(ViewType::kEditor) };
@@ -253,7 +253,7 @@ mod tests {
             bottom: 0,
         };
         assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
-        assert_eq!((rect.right, rect.bottom), (208, 212));
+        assert_eq!((rect.right, rect.bottom), (250, 424));
     }
 
     #[test]

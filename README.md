@@ -67,8 +67,10 @@ The tall meter shows the output peak in orange and RMS in teal, with numeric
 readouts beside it. The left arrow and horizontal line set the target. Select
 Peak or RMS to choose which level Match uses. In Manual mode, drag the round
 gain control vertically for coarse adjustments or drag the right meter arrow
-for fine adjustments. Arrow keys adjust a focused control; Shift makes smaller
-steps. Using either gain control enters Manual mode. Match and Normalize return
+for fine adjustments. At 0 dB gain, the right arrow sits at the meter's −12 dB
+mark and can move up or down across the manual gain range. Arrow keys adjust a
+focused control; Shift makes smaller steps. Using either gain control enters
+Manual mode. Match and Normalize return
 to Auto mode. Manual gain remains fixed when upstream audio gets louder; the
 sample-peak guard still prevents output above 0 dBFS. The default editor is
 250 × 424 logical pixels. The activity rail below Normalize has three short

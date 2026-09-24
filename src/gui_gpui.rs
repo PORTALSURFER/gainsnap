@@ -88,6 +88,7 @@ const METER_MAX_ELAPSED_SECONDS: f32 = 0.100;
 const METER_SETTLE_EPSILON_DB: f32 = 0.01;
 const TARGET_KEYBOARD_STEP_DB: f32 = 1.0;
 const TARGET_FINE_KEYBOARD_STEP_DB: f32 = 0.1;
+const GAIN_MARKER_NEUTRAL_DB: f32 = -12.0;
 const SURFACE_PADDING_X: f32 = 16.0;
 const SURFACE_PADDING_Y: f32 = 15.0;
 const SURFACE_COLUMN_GAP: f32 = 12.0;
@@ -521,8 +522,6 @@ pub(crate) struct GainSnapEditor {
     target_dragging: bool,
     gain_dragging: bool,
     gain_marker_selected: bool,
-    gain_drag_start_db: f32,
-    gain_drag_start_level_db: f32,
     knob_dragging: bool,
     knob_drag_start_y: f32,
     knob_drag_start_gain_db: f32,
@@ -597,8 +596,6 @@ impl GainSnapEditor {
             target_dragging: false,
             gain_dragging: false,
             gain_marker_selected: false,
-            gain_drag_start_db: 0.0,
-            gain_drag_start_level_db: 0.0,
             knob_dragging: false,
             knob_drag_start_y: 0.0,
             knob_drag_start_gain_db: 0.0,
@@ -747,15 +744,10 @@ impl GainSnapEditor {
             if self.gain_marker_selected {
                 self.controller.activate_manual();
                 self.gain_dragging = true;
-                self.gain_drag_start_db = self.controller.manual_gain_db();
-                self.gain_drag_start_level_db = (if self.controller.params.rms_mode() {
-                    self.controller.output_rms_db
-                } else {
-                    self.controller.output_peak_db
-                })
-                .clamp(TARGET_MIN_DB, TARGET_MAX_DB);
+                let gain_drag_start_level_db =
+                    gain_marker_level_db(self.controller.manual_gain_db());
                 self.target_drag_offset_y =
-                    target_marker_center_y(bounds, self.gain_drag_start_level_db)
+                    target_marker_center_y(bounds, gain_drag_start_level_db)
                         .map(|center_y| f32::from(event.position.y) - center_y)
                         .unwrap_or(0.0);
             } else {
@@ -789,9 +781,8 @@ impl GainSnapEditor {
                             / geometry.travel.max(1.0),
                     );
                     let level_db = TARGET_RANGE.denormalize(fraction);
-                    self.controller.set_manual_gain_db(
-                        self.gain_drag_start_db + level_db - self.gain_drag_start_level_db,
-                    );
+                    self.controller
+                        .set_manual_gain_db(gain_from_marker_level_db(level_db));
                 }
             } else {
                 self.controller.set_target_from_position(bounds, position);
@@ -915,6 +906,11 @@ impl Render for GainSnapEditor {
         let match_requested = self.controller.params.match_requested();
         let manual_mode = self.controller.params.manual_mode();
         let manual_gain_db = self.controller.manual_gain_db();
+        let active_gain_db = if manual_mode {
+            manual_gain_db
+        } else {
+            self.controller.params.locked_gain_db()
+        };
         let pulse_alpha = self.controller.pulse_alpha;
         let match_activity = self.controller.status.activity();
         let target_input = self.target_input.clone();
@@ -922,7 +918,7 @@ impl Render for GainSnapEditor {
             target_db,
             output_peak_db,
             output_rms_db,
-            rms_mode: mode_rms,
+            gain_db: active_gain_db,
             focused: meter_focused,
             gain_selected: gain_marker_selected,
         };
@@ -1381,12 +1377,36 @@ fn target_level_fraction(db: f32) -> f32 {
     }
 }
 
+// Place unity gain at -12 dB on the meter, with room to move the handle
+// in either direction across the full manual gain range.
+fn gain_marker_level_db(gain_db: f32) -> f32 {
+    let gain_db = gain_db.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB);
+    if gain_db >= 0.0 {
+        GAIN_MARKER_NEUTRAL_DB
+            + gain_db * (TARGET_MAX_DB - GAIN_MARKER_NEUTRAL_DB) / MANUAL_GAIN_MAX_DB
+    } else {
+        GAIN_MARKER_NEUTRAL_DB
+            + gain_db * (GAIN_MARKER_NEUTRAL_DB - TARGET_MIN_DB) / -MANUAL_GAIN_MIN_DB
+    }
+}
+
+fn gain_from_marker_level_db(level_db: f32) -> f32 {
+    let level_db = level_db.clamp(TARGET_MIN_DB, TARGET_MAX_DB);
+    if level_db >= GAIN_MARKER_NEUTRAL_DB {
+        (level_db - GAIN_MARKER_NEUTRAL_DB) * MANUAL_GAIN_MAX_DB
+            / (TARGET_MAX_DB - GAIN_MARKER_NEUTRAL_DB)
+    } else {
+        (level_db - GAIN_MARKER_NEUTRAL_DB) * -MANUAL_GAIN_MIN_DB
+            / (GAIN_MARKER_NEUTRAL_DB - TARGET_MIN_DB)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MeterPaintState {
     target_db: f32,
     output_peak_db: f32,
     output_rms_db: f32,
-    rms_mode: bool,
+    gain_db: f32,
     focused: bool,
     gain_selected: bool,
 }
@@ -1560,12 +1580,8 @@ fn paint_meter(bounds: Bounds<Pixels>, state: MeterPaintState, window: &mut Wind
             window.paint_path(emphasis, rgba(0xe95843ff));
         }
     }
-    let gain_db = if state.rms_mode {
-        state.output_rms_db
-    } else {
-        state.output_peak_db
-    };
-    let gain_y = target_marker_center_y(bounds, gain_db).unwrap_or(center_y);
+    let gain_y =
+        target_marker_center_y(bounds, gain_marker_level_db(state.gain_db)).unwrap_or(center_y);
     let gain_x = f32::from(track.right()) + TARGET_MARKER_GAP;
     let mut gain_marker = gpui::PathBuilder::fill();
     gain_marker.move_to(point(px(gain_x), px(gain_y)));
@@ -1744,6 +1760,20 @@ mod tests {
             step_target_db(TARGET_MIN_DB, TargetStepDirection::Down, false),
             TARGET_MIN_DB
         );
+    }
+
+    #[test]
+    fn gain_marker_starts_at_minus_twelve_and_covers_manual_range() {
+        for (gain_db, marker_db) in [
+            (MANUAL_GAIN_MIN_DB, TARGET_MIN_DB),
+            (-18.0, -24.0),
+            (0.0, GAIN_MARKER_NEUTRAL_DB),
+            (18.0, -6.0),
+            (MANUAL_GAIN_MAX_DB, TARGET_MAX_DB),
+        ] {
+            assert!((gain_marker_level_db(gain_db) - marker_db).abs() < 0.001);
+            assert!((gain_from_marker_level_db(marker_db) - gain_db).abs() < 0.001);
+        }
     }
 
     #[test]

@@ -371,7 +371,7 @@ mod tests {
 
         // Exercise the real Win32 text commit path as well as host-forwarded
         // editing keys. Give GPUI a frame to install the focused input handler.
-        let target_point = point_for(48.0, 184.0);
+        let target_point = point_for(72.0, 395.0);
         unsafe {
             SendMessageW(child, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(target_point));
             SendMessageW(child, WM_LBUTTONUP, Some(WPARAM(0)), Some(target_point));

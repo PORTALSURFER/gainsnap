@@ -23,7 +23,7 @@ pub struct StateSnapshot {
     pub match_requested: bool,
     /// Applied gain in dB.
     pub locked_gain_db: f32,
-    /// RMS mode; older projects default to Peak.
+    /// RMS mode; states before V3 retain their original Peak mode.
     pub rms_mode: bool,
     /// Legacy manual gain and mode; absent in states before V5.
     pub manual_gain_db: f32,
@@ -116,9 +116,10 @@ mod tests {
     #[test]
     fn rms_mode_round_trips_and_older_projects_keep_their_mode() {
         let params = GainSnapParams::new();
+        assert!(params.rms_mode(), "new instances should default to RMS");
         params.set_param(crate::params::PARAM_MATCH, 1.0);
-        let old = encode_payload(&params);
-        params.set_param(crate::params::PARAM_RMS_MODE, 1.0);
+        let mut old = encode_payload(&params);
+        old[5] = 0; // States before V3 did not store a mode.
         let saved = encode_payload(&params);
         let snapshot = decode_payload(STATE_VERSION, &saved).unwrap();
         assert!(snapshot.rms_mode);
@@ -132,6 +133,15 @@ mod tests {
         assert!(decode_payload(2, &saved).is_none());
         apply_snapshot(&restored, decode_payload(2, &old[..12]).unwrap());
         assert!(!restored.rms_mode() && !restored.match_requested());
+
+        params.set_param(crate::params::PARAM_RMS_MODE, 0.0);
+        let saved_peak = encode_payload(&params);
+        let saved_peak = decode_payload(STATE_VERSION, &saved_peak).unwrap();
+        apply_snapshot(&restored, saved_peak);
+        assert!(
+            !restored.rms_mode(),
+            "saved Peak choice should be preserved"
+        );
     }
 
     #[test]
@@ -164,6 +174,7 @@ mod tests {
     #[test]
     fn legacy_state_migrates_match_now_to_off() {
         let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_RMS_MODE, 0.0);
         params.set_param(crate::params::PARAM_TARGET_DB, -7.5);
         params.set_param(crate::params::PARAM_MATCH, 1.0);
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 5.25);
@@ -200,10 +211,12 @@ mod tests {
         apply_snapshot(&restored, decoded);
 
         let mut previous = payload;
+        previous[5] = 0;
         for version in [1, 2, 3] {
             let older = decode_payload(version, &previous[..12]).expect("valid older state");
             apply_snapshot(&restored, older);
         }
+        previous[5] = 1;
         previous[6] = 1;
         for version in [4, 5] {
             let len = if version == 4 {

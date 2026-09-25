@@ -507,6 +507,12 @@ fn host_param_requester(host: HostSharedHandle<'_>) -> Option<HostParamRequester
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn peak_params() -> GainSnapParams {
+        let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_RMS_MODE, 0.0);
+        params
+    }
     use crate::state::{encode_payload, LEGACY_STATE_VERSION};
     use crate::status::MatchState;
     use std::io::Cursor;
@@ -530,7 +536,7 @@ mod tests {
 
     #[test]
     fn clap_v1_state_migrates_match_now_to_off_and_preserves_gain() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(crate::params::PARAM_TARGET_DB, -7.5);
         params.set_param(crate::params::PARAM_MATCH, 1.0);
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 5.25);
@@ -604,7 +610,7 @@ mod tests {
 
         let mut samples = [0.25_f32; 1024];
         samples[512..].fill(0.9);
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &samples);
 
@@ -630,7 +636,7 @@ mod tests {
 
         let mut samples = [0.9_f32; 1024];
         samples[512..].fill(0.25);
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &samples);
 
@@ -656,7 +662,7 @@ mod tests {
             Some((PARAM_MATCH, 0.0))
         );
 
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &[0.25; 1024]);
         apply_clap_overflow_final(&overflow_final, &params, &mut engine);

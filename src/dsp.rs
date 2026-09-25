@@ -224,8 +224,8 @@ impl GainSnapEngine {
         let gain = db_to_linear(locked_gain_db);
         Self {
             manual_mode: false,
-            rms_mode: false,
-            measurement_rms_mode: false,
+            rms_mode: true,
+            measurement_rms_mode: true,
             rms_silence_frames: (sample_rate * 2.0).ceil().max(1.0) as u64,
             rms_frames: 0,
             rms_quiet_frames: 0,
@@ -530,6 +530,21 @@ impl GainSnapEngine {
             .clamp(GAIN_MIN_LINEAR, maximum_gain)
     }
 
+    fn rms_target_limited(&self, level: f32) -> bool {
+        if !self.measurement_rms_mode || !self.input_rms.complete() || level <= SILENCE_PEAK_LINEAR
+        {
+            return false;
+        }
+        let requested_gain = self.measurement_target_peak / level;
+        let headroom_gain = if self.rolling_measurement_peak > SILENCE_PEAK_LINEAR {
+            1.0 / self.rolling_measurement_peak
+        } else {
+            RMS_GAIN_MAX_LINEAR
+        };
+        let available_gain = headroom_gain.min(RMS_GAIN_MAX_LINEAR);
+        requested_gain > available_gain * MATCH_ADAPTATION_STABILITY_RATIO
+    }
+
     fn consider_measurement_candidate(
         &mut self,
         params: &GainSnapParams,
@@ -813,12 +828,15 @@ impl GainSnapEngine {
                     > self.target_gain.max(self.current_gain).max(1.0) * 0.001;
                 let transition_active = self.match_fade_position < 1.0
                     || self.fade_out_position < 1.0
-                    || self.peak_guard_gain < 0.999
                     || self.activity_adjustment_hold_frames > 0;
                 if gain_slewing || transition_active {
                     MatchActivity::Adjusting
                 } else if self.quieter_history_pending() || candidate_pending {
                     MatchActivity::Listening
+                } else if self.rms_target_limited(candidate_level) {
+                    MatchActivity::BelowTarget
+                } else if self.peak_guard_gain < 0.999 {
+                    MatchActivity::Adjusting
                 } else {
                     MatchActivity::Matched
                 }
@@ -875,6 +893,12 @@ fn sanitize_gain_db(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn peak_params() -> GainSnapParams {
+        let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_RMS_MODE, 0.0);
+        params
+    }
     use crate::params::{PARAM_MATCH, PARAM_TARGET_DB};
 
     fn run_frames(engine: &mut GainSnapEngine, params: &GainSnapParams, left: f32, frames: usize) {
@@ -889,7 +913,7 @@ mod tests {
     }
 
     fn rms_params() -> GainSnapParams {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(crate::params::PARAM_RMS_MODE, 1.0);
         params.set_param(PARAM_MATCH, 1.0);
         params
@@ -897,7 +921,7 @@ mod tests {
 
     #[test]
     fn manual_gain_is_fixed_across_louder_input_and_auto_can_resume() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(crate::params::PARAM_MANUAL_GAIN_DB, 6.0);
         params.set_param(crate::params::PARAM_MANUAL_MODE, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 6.0);
@@ -929,7 +953,7 @@ mod tests {
 
     #[test]
     fn activity_moves_from_listening_through_adjusting_to_matched() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
 
@@ -945,7 +969,7 @@ mod tests {
 
     #[test]
     fn activity_stays_matched_after_a_quieter_peak_passage() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.5, 2_000);
@@ -959,7 +983,7 @@ mod tests {
 
     #[test]
     fn activity_reports_louder_adjustment_and_explicit_silence_states() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.25, 2_000);
@@ -985,7 +1009,7 @@ mod tests {
 
     #[test]
     fn enabled_peak_match_rematches_louder_upstream_audio_without_editor_events() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         let target = db_to_linear(params.target_db());
@@ -1013,7 +1037,7 @@ mod tests {
 
     #[test]
     fn stopped_peak_match_keeps_the_user_gain_on_louder_input() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.1, 2_000);
@@ -1057,7 +1081,7 @@ mod tests {
     #[test]
     fn saved_match_gain_stays_manual_after_fresh_engine_activation() {
         for rms_mode in [false, true] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(crate::params::PARAM_RMS_MODE, f32::from(rms_mode));
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1069,7 +1093,7 @@ mod tests {
             let payload = crate::state::encode_payload(&params);
             let snapshot = crate::state::decode_payload(crate::state::STATE_VERSION, &payload)
                 .expect("valid saved match");
-            let restored = GainSnapParams::new();
+            let restored = peak_params();
             crate::state::apply_snapshot(&restored, snapshot);
             let previous_gain = restored.locked_gain_db();
             let mut reactivated = GainSnapEngine::new(1_000.0, previous_gain);
@@ -1085,7 +1109,7 @@ mod tests {
 
     #[test]
     fn untouched_instance_remains_unarmed_after_activation() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::Ready);
@@ -1094,7 +1118,7 @@ mod tests {
 
     #[test]
     fn loading_unarmed_state_disarms_an_existing_held_match() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.1, 2_000);
@@ -1102,7 +1126,7 @@ mod tests {
         engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::Locked);
 
-        let unarmed = GainSnapParams::new();
+        let unarmed = peak_params();
         let snapshot = crate::state::decode_payload(
             crate::state::STATE_VERSION,
             &crate::state::encode_payload(&unarmed),
@@ -1117,12 +1141,12 @@ mod tests {
 
     #[test]
     fn loading_state_during_match_adopts_saved_manual_gain() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.1, 2_000);
 
-        let saved = GainSnapParams::new();
+        let saved = peak_params();
         saved.set_param(crate::params::PARAM_LOCKED_GAIN_DB, -6.0);
         let snapshot = crate::state::decode_payload(
             crate::state::STATE_VERSION,
@@ -1161,7 +1185,7 @@ mod tests {
         const SETTLED_AFTER: usize = SAMPLE_RATE * 3;
 
         for block_size in [64, 512] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(SAMPLE_RATE as f32, 0.0);
             let mut frame = 0;
@@ -1194,7 +1218,7 @@ mod tests {
         const SETTLED_AFTER: usize = SAMPLE_RATE * 3;
 
         for block_size in [64, 512] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(SAMPLE_RATE as f32, 0.0);
             let mut frame = 0;
@@ -1337,7 +1361,7 @@ mod tests {
 
     #[test]
     fn rms_matching_adapts_loud_quiet_loud_repeatedly_without_toggle() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(crate::params::PARAM_RMS_MODE, 1.0);
         params.set_param(PARAM_MATCH, 1.0);
@@ -1382,7 +1406,7 @@ mod tests {
 
     #[test]
     fn peak_matching_does_not_progressively_boost_a_decaying_tail() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1450,7 +1474,7 @@ mod tests {
         bpm: usize,
         target_db: f32,
         release_phase: f32,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, f32, f32, MatchActivity) {
         let params = rms_params();
         params.set_param(PARAM_TARGET_DB, target_db);
         let mut engine = GainSnapEngine::new(sample_rate as f32, 0.0);
@@ -1458,18 +1482,28 @@ mod tests {
         let beat_frames = sample_rate * 60 / bpm;
         let release_at = beat_frames * 4 + (beat_frames as f32 * release_phase) as usize;
         let mut output_peak = 0.0_f32;
+        let mut strongest_output_rms_db = -120.0_f32;
         for frame in 0..=release_at {
             let input = damped_kick(frame, sample_rate, bpm);
             let output = engine.process_frame(&params, input, -input * 0.7);
             assert!(output.0.is_finite() && output.1.is_finite());
             if frame >= beat_frames * 2 {
                 output_peak = output_peak.max(output.0.abs()).max(output.1.abs());
+                strongest_output_rms_db =
+                    strongest_output_rms_db.max(engine.report().output_rms_db);
             }
         }
         let gain = params.locked_gain_db();
+        let report = engine.report();
         params.set_param(PARAM_MATCH, 0.0);
         engine.sync_controls(&params);
-        (gain, output_peak)
+        (
+            gain,
+            output_peak,
+            report.output_rms_db,
+            strongest_output_rms_db,
+            report.activity,
+        )
     }
 
     #[test]
@@ -1491,10 +1525,16 @@ mod tests {
 
     #[test]
     fn rms_kick_headroom_bounds_unreachable_targets_before_the_guard() {
+        let (_, _, _, strongest_rms, activity) = measure_kicks(48_000, 120, -18.0, 0.8);
+        assert!((strongest_rms + 18.0).abs() < 0.05);
+        assert_eq!(activity, MatchActivity::Matched);
         for target in [-12.0, 0.0] {
-            let (gain, output_peak) = measure_kicks(48_000, 120, target, 0.8);
+            let (gain, output_peak, _, strongest_rms, activity) =
+                measure_kicks(48_000, 120, target, 0.8);
             assert!(output_peak <= 1.0);
             assert!(gain < 3.0, "target={target} gain={gain}");
+            assert!(strongest_rms < target - 1.0);
+            assert_eq!(activity, MatchActivity::BelowTarget, "target={target}");
         }
     }
 
@@ -1502,9 +1542,10 @@ mod tests {
     #[ignore = "prints representative kick gain and output-peak measurements"]
     fn rms_kick_fixture_metrics() {
         for target in [-18.0, -12.0, 0.0] {
-            let (gain, output_peak) = measure_kicks(48_000, 120, target, 0.8);
+            let (gain, output_peak, output_rms_db, max_rms_db, activity) =
+                measure_kicks(48_000, 120, target, 0.8);
             println!(
-                "target={target:.0} dBFS, held gain={gain:.3} dB, output peak={output_peak:.6}"
+                "target={target:.0} dBFS, held gain={gain:.3} dB, output peak={output_peak:.6}, current RMS={output_rms_db:.3} dBFS, strongest RMS={max_rms_db:.3} dBFS, activity={activity:?}"
             );
         }
     }
@@ -1605,7 +1646,7 @@ mod tests {
 
     #[test]
     fn mode_changes_during_matching_preserve_the_first_output_sample() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
@@ -1644,7 +1685,7 @@ mod tests {
 
     #[test]
     fn matching_applies_gain_live_and_turning_it_off_holds_it() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1679,7 +1720,7 @@ mod tests {
 
     #[test]
     fn peak_session_keeps_loudest_sample_after_history_window() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
@@ -1716,7 +1757,7 @@ mod tests {
 
     #[test]
     fn peak_zero_target_reaches_quiet_input_peak() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1735,7 +1776,7 @@ mod tests {
 
     #[test]
     fn peak_normalize_reaches_near_silence_floor_without_a_window_cap() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1762,7 +1803,7 @@ mod tests {
 
     #[test]
     fn peak_restart_discards_the_previous_session_maximum() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1780,7 +1821,7 @@ mod tests {
 
     #[test]
     fn turning_match_on_again_starts_a_fresh_measurement() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
 
         params.set_param(PARAM_MATCH, 1.0);
@@ -1802,7 +1843,7 @@ mod tests {
 
     #[test]
     fn changing_target_while_peak_matching_reuses_session_maximum() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, -12.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -1835,7 +1876,7 @@ mod tests {
 
     #[test]
     fn silence_does_not_create_unbounded_gain() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 3.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 3.0);
@@ -1850,7 +1891,7 @@ mod tests {
 
     #[test]
     fn non_finite_audio_is_silenced() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
         let output = engine.process_frame(&params, f32::NAN, f32::INFINITY);
@@ -1860,7 +1901,7 @@ mod tests {
 
     #[test]
     fn live_match_slews_and_toggle_off_does_not_change_audio() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
@@ -1884,7 +1925,7 @@ mod tests {
     #[test]
     fn live_match_keeps_gain_bounded_and_ignores_silence_and_invalid_samples() {
         for input in [1.0e-5, 16.0] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
             engine.begin_block(&params);
@@ -1902,7 +1943,7 @@ mod tests {
     #[test]
     fn match_fades_from_silence_even_after_preroll_with_a_stored_boost() {
         for sample_rate in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 24.0);
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(sample_rate, 24.0);
@@ -1932,7 +1973,7 @@ mod tests {
     #[test]
     fn a_loud_burst_after_quiet_matching_cannot_exceed_the_target() {
         for target in [-36.0, -12.0, 0.0] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(PARAM_TARGET_DB, target);
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
@@ -1958,7 +1999,7 @@ mod tests {
     #[test]
     fn extreme_startup_peaks_follow_the_fade_ceiling() {
         for input in [8.0, f32::MAX] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 24.0);
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(48_000.0, 24.0);
@@ -1979,7 +2020,7 @@ mod tests {
 
     #[test]
     fn output_guard_protects_held_gain_and_recovers_smoothly_without_boosting() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, 24.0);
         let mut engine = GainSnapEngine::new(48_000.0, 24.0);
         engine.begin_block(&params);
@@ -1998,7 +2039,7 @@ mod tests {
 
     #[test]
     fn early_match_off_and_reengagement_keep_the_quiet_start() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
@@ -2022,7 +2063,7 @@ mod tests {
 
     #[test]
     fn target_edits_fade_out_before_enforcing_the_new_ceiling() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_TARGET_DB, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
@@ -2045,7 +2086,7 @@ mod tests {
     fn engaging_match_on_playing_audio_has_no_hard_mute_or_large_step() {
         for sample_rate in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
             for target in [-36.0, -12.0, 0.0] {
-                let params = GainSnapParams::new();
+                let params = peak_params();
                 params.set_param(PARAM_TARGET_DB, target);
                 let mut engine = GainSnapEngine::new(sample_rate, 0.0);
                 engine.begin_block(&params);
@@ -2075,7 +2116,7 @@ mod tests {
     #[test]
     fn rapid_match_restarts_keep_the_current_audible_gain() {
         for restart_after in [1, 17, 240, 481, 2_000] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
             engine.begin_block(&params);
             run_frames(&mut engine, &params, 0.5, 128);
@@ -2096,7 +2137,7 @@ mod tests {
     #[test]
     fn engagement_preserves_the_waveform_at_nonzero_sine_phases() {
         for phase in [0.1_f32, 0.7, 1.5, 2.7, 3.3, 4.6, 5.8] {
-            let params = GainSnapParams::new();
+            let params = peak_params();
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
             engine.begin_block(&params);
             let input = phase.sin() * 0.7;
@@ -2112,7 +2153,7 @@ mod tests {
 
     #[test]
     fn disabling_match_without_signal_does_not_leave_output_muted() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
@@ -2127,7 +2168,7 @@ mod tests {
     #[test]
     #[cfg(feature = "vst3")]
     fn host_processing_reset_restarts_the_match_fade() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(48_000.0, 0.0);
         engine.begin_block(&params);
@@ -2140,7 +2181,7 @@ mod tests {
     #[test]
     #[cfg(feature = "vst3")]
     fn host_processing_reset_preserves_stopped_manual_gain() {
-        let params = GainSnapParams::new();
+        let params = peak_params();
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_block(&mut engine, &params, 0.1, 2_000);

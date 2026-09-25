@@ -9,12 +9,12 @@ AudioDev plug-in repository (gainsnap), category **Utility**.
 GainSnap starts as a manual gain utility. The knob and right meter arrow edit the
 same Gain parameter. While Match is enabled, GainSnap measures the input and
 adjusts that parameter toward the selected target. Turning Match off freezes
-the setting: later upstream level changes do not rematch. The Normalize button
-sets the target to 0 dBFS and starts Match in one click.
+the setting: later upstream level changes do not rematch. Enter a target below
+the meter, then click the adjacent Match icon; the smaller icon restarts matching.
 Shared host and GUI mechanics remain in Toybox.
 
-The PEAK/RMS button selects the matching measurement and output meter. Peak
-remains the default, including when loading older projects. RMS matching uses
+Click the Peak or RMS output readout to select the matching measurement. New
+instances default to RMS; saved projects retain their selected mode. RMS matching uses
 the strongest complete 300 ms sliding mean-square window of each channel and
 links gain to the louder channel, preserving stereo balance. The output meter
 shows the latest 300 ms sliding RMS window. The scale uses a full-scale square
@@ -41,8 +41,8 @@ roughly 3–4 seconds of steady material to respond.
 Peak targets that would require more than −36 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
 matching retains its +24 dB boost cap and peak-headroom protection. The meter
-always shows the actual protected output. Normalize switches to PEAK, sets 0
-dBFS, and starts Match.
+always shows the actual protected output. To normalize to 0 dBFS, select Peak,
+enter 0 as the target, and start Match.
 
 Engaging Match while audio is playing first fades the audible gain down over
 10 ms, then fades the matched output up over 300 ms. This avoids the waveform
@@ -70,12 +70,13 @@ of the moving meter bars. Double-click the value in the knob to type a gain in
 dB. Arrow keys adjust a focused control; Shift makes smaller steps. Editing
 either gain control stops Match. The sample-peak guard still prevents output
 above 0 dBFS. The default editor is
-250 × 424 logical pixels. The activity rail below Normalize has three short
-stages: Listening, Adjusting, and Matched. It reports live audio activity
+250 × 424 logical pixels. The activity rail below the output readouts has three short
+stages: Listening, Adjusting, and Matched or Below target. It reports live audio activity
 independently of the Match lifecycle; when Match is off, it shows Manual.
-Matched means the correction has settled within the available gain
-and peak-headroom limits, so an unreachable target can still settle at the
-closest protected level. After a correction or peak-guard event, the telemetry
+Matched means the correction has settled. Below target means the
+requested RMS needs more gain than peak headroom or the gain range allows; GainSnap
+does not compress or limit the transients to reach it. RMS matching uses the strongest measured 300 ms window; the
+live RMS readout may fall between hits. After a correction or peak-guard event, the telemetry
 keeps Adjusting visible for about 200 ms so short gain changes remain legible
 at normal editor refresh rates. Native macOS and Windows editors share this
 surface, including host keyboard input, focus, and DPI-aware resizing.
@@ -115,7 +116,7 @@ for scheduler commands, approval gates, and retry behavior.
 
 From the AudioDev root, use the dependency-ordered commands below. Every command plans by default; add --execute to allow its own mutation:
 
-cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Peak and RMS level matching for your DAW" --description "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale and target marker."
+cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- init --name gainsnap --display-name GainSnap --category Utility --tagline "Peak and RMS level matching for your DAW" --description "GainSnap measures the selected Peak or RMS level while Match is enabled, adjusts gain toward the target, and holds that gain when Match is disabled. Enter a target below the meter, choose Peak or RMS from the output readouts, and use the adjacent Match and rematch icons. The vertical meter shows output Peak and RMS with a target marker."
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- remote --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- credentials --plugin gainsnap
 cargo run --manifest-path audiodev-plugin-bootstrap/Cargo.toml -- landing --plugin gainsnap --site-root /path/to/portalsurfer.org

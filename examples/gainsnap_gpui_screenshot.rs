@@ -17,14 +17,9 @@ mod macos {
     use std::ptr::NonNull;
     use std::thread;
     use std::time::Duration;
-    use toybox::clack_plugin::utils::ClapId;
 
     const OUTPUT_WIDTH: u32 = WINDOW_WIDTH;
     const OUTPUT_HEIGHT: u32 = WINDOW_HEIGHT;
-    const PARAM_TARGET_DB: ClapId = ClapId::new(1);
-    const PARAM_MATCH: ClapId = ClapId::new(2);
-    const PARAM_RMS_MODE: ClapId = ClapId::new(4);
-
     struct NativeFixture {
         window: id,
         view: id,
@@ -283,7 +278,7 @@ mod macos {
 
     unsafe fn select_target_with_mouse(window: id) {
         let window_number: isize = msg_send![window, windowNumber];
-        for (event_type, x) in [(1_usize, 94.0), (6_usize, 50.0), (2_usize, 50.0)] {
+        for (event_type, x) in [(1_usize, 67.0), (6_usize, 23.0), (2_usize, 23.0)] {
             let event: id = msg_send![class!(NSEvent),
                 mouseEventWithType: event_type
                 location: NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - 395.0)
@@ -416,7 +411,7 @@ mod macos {
             "unfocused Space must not toggle Match"
         );
 
-        send_click(fixture.window, 72.0, 395.0);
+        send_click(fixture.window, 45.0, 395.0);
         pump_appkit(app, &gui, 0.03);
 
         send_key(app, fixture.window, &gui, "a", 0, COMMAND);
@@ -660,7 +655,7 @@ mod macos {
 
         // The knob and right marker both edit the same gain parameter.
         let target_before_manual = params.target_db();
-        send_click(fixture.window, 185.0, 265.0);
+        send_click(fixture.window, 185.0, 390.0);
         pump_appkit(app, &gui, 0.03);
         assert!(!params.match_requested());
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
@@ -675,7 +670,7 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag(fixture.window, 185.0, 270.0, 250.0);
+        send_drag(fixture.window, 185.0, 390.0, 370.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             (params.manual_gain_db() - 10.99).abs() < 0.01,
@@ -689,7 +684,7 @@ mod macos {
         assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
         assert_eq!(params.target_db(), target_before_manual);
 
-        send_double_click(fixture.window, 185.0, 245.0);
+        send_double_click(fixture.window, 185.0, 373.0);
         pump_appkit(app, &gui, 0.03);
         let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
         write_capture(&output_root(), "gain-entry", w, h, pixels);
@@ -699,10 +694,26 @@ mod macos {
         send_key(app, fixture.window, &gui, "\r", 36, 0);
         assert_eq!(params.locked_gain_db(), -6.0, "dial text should set gain");
 
-        // Exercise native focus plus GPUI's keyboard click path for every
-        // action control. A repeated Space keydown must still produce only
-        // one keyup click, and modified activation keys must pass through.
-        send_click(fixture.window, 144.0, 364.0);
+        // The output readouts select the matching mode without a separate
+        // toggle button. Enter repeats the focused radio selection.
+        send_click(fixture.window, 143.0, 64.0);
+        pump_appkit(app, &gui, 0.03);
+        assert!(params.rms_mode(), "RMS readout should select RMS matching");
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert!(
+            params.rms_mode(),
+            "Enter should preserve focused RMS selection"
+        );
+        send_click(fixture.window, 143.0, 45.0);
+        pump_appkit(app, &gui, 0.03);
+        assert!(
+            !params.rms_mode(),
+            "Peak readout should select Peak matching"
+        );
+
+        // Exercise native focus plus GPUI's keyboard click path for both
+        // meter-row actions. A repeated Space keydown must toggle Match once.
+        send_click(fixture.window, 88.0, 395.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             params.match_requested(),
@@ -724,56 +735,15 @@ mod macos {
             "Enter should activate the focused Match button"
         );
 
-        send_click(fixture.window, 144.0, 328.0);
+        let generation = params.restart_generation();
+        send_click(fixture.window, 114.0, 395.0);
         pump_appkit(app, &gui, 0.03);
-        assert!(params.rms_mode(), "native RMS click should activate");
-        send_key(app, fixture.window, &gui, "\r", 36, 0);
-        assert!(
-            !params.rms_mode(),
-            "Enter should activate the focused RMS button"
-        );
-
-        send_click(fixture.window, 144.0, 399.0);
-        pump_appkit(app, &gui, 0.03);
-        assert_eq!(
-            params.target_db(),
-            0.0,
-            "native Normalize click should set 0 dB"
-        );
-        assert!(
-            !params.rms_mode(),
-            "Normalize should leave peak mode selected"
-        );
-        assert!(params.match_requested(), "Normalize should enable Match");
-
-        // Change the shared state behind the still-focused Normalize control,
-        // then require Enter to perform the action again. This distinguishes
-        // keyboard activation from the preceding mouse click.
-        params.set_param(PARAM_TARGET_DB, -15.0);
-        params.set_param(PARAM_RMS_MODE, 1.0);
-        params.set_param(PARAM_MATCH, 0.0);
-        pump_appkit(app, &gui, 0.08);
+        assert_eq!(params.restart_generation(), generation + 1);
         send_key(app, fixture.window, &gui, "\r", 36, SHIFT);
-        assert_eq!(
-            params.target_db(),
-            -15.0,
-            "modified Enter must pass through"
-        );
-        assert!(params.rms_mode(), "modified Enter must not normalize");
-        assert!(
-            !params.match_requested(),
-            "modified Enter must not enable Match"
-        );
+        assert_eq!(params.restart_generation(), generation + 1);
         send_key(app, fixture.window, &gui, "\r", 36, 0);
-        assert_eq!(params.target_db(), 0.0, "Enter should activate Normalize");
-        assert!(
-            !params.rms_mode(),
-            "keyboard Normalize should force peak mode"
-        );
-        assert!(
-            params.match_requested(),
-            "keyboard Normalize should enable Match"
-        );
+        assert_eq!(params.restart_generation(), generation + 2);
+        assert!(params.match_requested(), "rematch keeps Match enabled");
         pump_appkit(app, &gui, 0.12);
         eprintln!(
             "PASS native GPUI GainSnap target editing, coarse and fine manual gain, clipboard, arrows, and focused-button Space/Enter activation"
@@ -894,10 +864,10 @@ mod macos {
             let fixture = NativeFixture::new();
             let root = output_root();
             std::fs::create_dir_all(&root).expect("screenshot directory should be writable");
-            capture_state(&fixture, &root, "initial-ui", false, false, false);
-            capture_state(&fixture, &root, "matching-bright", true, false, false);
-            capture_state(&fixture, &root, "matching-dim", true, false, true);
-            capture_state(&fixture, &root, "rms-mode", true, true, false);
+            capture_state(&fixture, &root, "initial-ui", false, true, false);
+            capture_state(&fixture, &root, "matching-bright", true, true, false);
+            capture_state(&fixture, &root, "matching-dim", true, true, true);
+            capture_state(&fixture, &root, "peak-mode", true, false, false);
             exercise_native_target_input(&fixture);
             drop(fixture);
             pool.drain();

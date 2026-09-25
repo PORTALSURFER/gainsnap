@@ -96,6 +96,7 @@ mod tests {
     #[test]
     fn vst3_v1_state_migrates_match_now_to_off_and_preserves_gain() {
         let params = GainSnapParams::new();
+        params.set_param(crate::params::PARAM_RMS_MODE, 0.0);
         params.set_param(PARAM_TARGET_DB, -7.5);
         params.set_param(PARAM_MATCH, 1.0);
         params.set_param(PARAM_LOCKED_GAIN_DB, 5.25);

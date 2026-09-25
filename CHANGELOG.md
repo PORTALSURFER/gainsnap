@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Group output levels and match status at the top of the editor, place the
+  coarse gain dial and action buttons at the bottom, and show the dial position.
 - Start the visible meters when the editor opens; keep the fine gain slider
   independent from the moving meter and allow direct numeric gain entry.
 - Keep gain manual except while Match is active, then retain the matched gain

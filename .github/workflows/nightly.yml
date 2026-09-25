@@ -1,9 +1,6 @@
 name: GainSnap nightly scheduler
 
 on:
-  schedule:
-    - cron: "0 20 * * *"
-      timezone: "Europe/Amsterdam"
   workflow_dispatch:
     inputs:
       force:

@@ -49,7 +49,10 @@ checkout, a non-main checkout, or a local main that differs from `origin/main`.
 Each local release keeps its own immutable build ID and an audited manifest in
 `dist/releases/`.
 
-## Hosted GitHub Actions path (legacy)
+## Hosted GitHub Actions path (legacy, manual dispatch only)
+
+Automatic push, pull-request, and scheduled workflow triggers are disabled to
+avoid hosted CI costs. The workflows remain available for explicit dispatch.
 
 Use the `GainSnap nightly scheduler` workflow (`nightly.yml`) to prepare and publish a new nightly:
 
@@ -57,7 +60,7 @@ Use the `GainSnap nightly scheduler` workflow (`nightly.yml`) to prepare and pub
 gh workflow run nightly.yml --repo PORTALSURFER/gainsnap --ref main
 ```
 
-A scheduled run skips a source commit already published as a nightly. Use `-f force=true` to request a new nightly even without source changes.
+The coordinator skips a source commit already published as a nightly. Use `-f force=true` to request a new nightly even without source changes.
 
 Each new nightly advances the package patch version in both `Cargo.toml` and `Cargo.lock`. For example, a prepared release is `0.1.1-nightly.<run-number>`. The workflow sequence distinguishes attempts; it does not replace the package patch increment. If a version was prepared but publication failed, retrying reuses that unpublished package version.
 

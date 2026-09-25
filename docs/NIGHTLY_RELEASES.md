@@ -15,8 +15,8 @@ Set up local credentials once:
 1. Select the intended Developer ID Application fingerprint from
    `security find-identity -v -p codesigning` and set
    `APPLE_CODESIGN_IDENTITY` to that 40-character fingerprint.
-2. Run `python3 scripts/local_notary_setup.py` to preview the local Apple key,
-   then rerun with `--execute` in a terminal to enter the issuer ID and store
+2. Run `python3 scripts/local_notary_setup.py` to preview the local Apple Team API Key,
+   then rerun with `--execute` in a terminal to enter its issuer ID and store
    the validated `gainsnap-local` profile in Keychain. Alternatively,
    set `APPLE_NOTARY_KEY_PATH`, `APPLE_NOTARY_KEY_ID`, and
    `APPLE_NOTARY_ISSUER_ID` for direct local key use. The key and issuer are

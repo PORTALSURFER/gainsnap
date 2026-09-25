@@ -32,18 +32,17 @@ def main() -> int:
         return 1
     if not args.execute:
         print(f"Plan: validate the local {key.name} with Apple and store the {PROFILE} Keychain profile.")
-        print("Rerun with --execute; the issuer ID is entered interactively and never saved in this repository.")
+        print("Rerun with --execute; enter the Team API Key issuer ID interactively. Individual keys cannot notarize.")
         return 0
     if not sys.stdin.isatty():
         print("Run --execute in an interactive terminal to enter the issuer ID.", file=sys.stderr)
         return 1
-    issuer = input("App Store Connect issuer ID (leave blank for an Individual API Key): ").strip()
-    if issuer and not ISSUER.fullmatch(issuer):
-        print("Issuer ID must be a UUID.", file=sys.stderr)
+    issuer = input("App Store Connect Team API Key issuer ID: ").strip()
+    if not ISSUER.fullmatch(issuer):
+        print("A Team API Key issuer ID (UUID) is required for notarization.", file=sys.stderr)
         return 1
     command = ["xcrun", "notarytool", "store-credentials", PROFILE, "--key", str(key), "--key-id", match.group(1), "--validate"]
-    if issuer:
-        command += ["--issuer", issuer]
+    command += ["--issuer", issuer]
     result = subprocess.run(command, check=False)
     if result.returncode:
         print("Apple did not validate the notary profile; nothing was published.", file=sys.stderr)

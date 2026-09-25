@@ -374,8 +374,10 @@ _audit_zip(pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], cwd=pathlib.Path
 PY
 }
 
-clap_target="${tmp_root}/clap-target"
-vst3_target="${tmp_root}/vst3-target"
+# Cargo fingerprints feature sets separately. Reuse dependency builds across
+# the two formats; each bundle is copied and audited before the next build.
+clap_target="${repo_root}/target"
+vst3_target="${repo_root}/target"
 echo "[release] building CLAP"
 TOYBOX_ACTIVE_ARTIFACT=clap CARGO_TARGET_DIR="${clap_target}" cargo build --locked --release
 clap_binary="${clap_target}/release/libgainsnap.dylib"

@@ -660,7 +660,7 @@ mod macos {
 
         // The knob and right marker both edit the same gain parameter.
         let target_before_manual = params.target_db();
-        send_click(fixture.window, 185.0, 210.0);
+        send_click(fixture.window, 185.0, 265.0);
         pump_appkit(app, &gui, 0.03);
         assert!(!params.match_requested());
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
@@ -675,7 +675,7 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag(fixture.window, 185.0, 235.0, 215.0);
+        send_drag(fixture.window, 185.0, 270.0, 250.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             (params.manual_gain_db() - 10.99).abs() < 0.01,
@@ -689,7 +689,7 @@ mod macos {
         assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
         assert_eq!(params.target_db(), target_before_manual);
 
-        send_double_click(fixture.window, 185.0, 210.0);
+        send_double_click(fixture.window, 185.0, 245.0);
         pump_appkit(app, &gui, 0.03);
         let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
         write_capture(&output_root(), "gain-entry", w, h, pixels);
@@ -702,7 +702,7 @@ mod macos {
         // Exercise native focus plus GPUI's keyboard click path for every
         // action control. A repeated Space keydown must still produce only
         // one keyup click, and modified activation keys must pass through.
-        send_click(fixture.window, 144.0, 110.0);
+        send_click(fixture.window, 144.0, 364.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             params.match_requested(),
@@ -724,7 +724,7 @@ mod macos {
             "Enter should activate the focused Match button"
         );
 
-        send_click(fixture.window, 144.0, 76.0);
+        send_click(fixture.window, 144.0, 328.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.rms_mode(), "native RMS click should activate");
         send_key(app, fixture.window, &gui, "\r", 36, 0);
@@ -733,7 +733,7 @@ mod macos {
             "Enter should activate the focused RMS button"
         );
 
-        send_click(fixture.window, 144.0, 144.0);
+        send_click(fixture.window, 144.0, 399.0);
         pump_appkit(app, &gui, 0.03);
         assert_eq!(
             params.target_db(),

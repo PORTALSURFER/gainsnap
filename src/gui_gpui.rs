@@ -24,8 +24,8 @@ use toybox::gpui_gui::{
 
 use crate::clap_plugin::HostParamRequester;
 use crate::params::{
-    GAIN_MAX_DB, GAIN_MIN_DB, PARAM_LOCKED_GAIN_DB, PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB,
-    TARGET_MAX_DB, TARGET_MIN_DB,
+    GAIN_MAX_DB, GAIN_MIN_DB, MANUAL_GAIN_MAX_DB, MANUAL_GAIN_MIN_DB, PARAM_LOCKED_GAIN_DB,
+    PARAM_MATCH, PARAM_RMS_MODE, PARAM_TARGET_DB, TARGET_MAX_DB, TARGET_MIN_DB,
 };
 use crate::status::{GuiStatus, MatchActivity, MatchState};
 
@@ -1115,6 +1115,7 @@ impl Render for GainSnapEditor {
 
         let knob = div()
             .id("manual-gain-knob")
+            .relative()
             .w(px(72.0))
             .h(px(72.0))
             .rounded_full()
@@ -1136,6 +1137,16 @@ impl Render for GainSnapEditor {
             .on_mouse_move(cx.listener(Self::knob_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::knob_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::knob_mouse_up))
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        paint_knob_marker(bounds, manual_gain_db, window);
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(div().w(px(58.0)).h(px(22.0)).child(self.gain_input.clone()));
         let manual_control = div()
             .flex()
@@ -1148,18 +1159,6 @@ impl Render for GainSnapEditor {
                     .text_size(px(10.0))
                     .text_color(solid(TEXT_MUTED))
                     .child("COARSE GAIN"),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(solid(ACCENT))
-                    .child(format!("PEAK {output_peak_db:.1} dB")),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(solid(RMS_COLOR))
-                    .child(format!("RMS  {output_rms_db:.1} dB")),
             );
 
         let active_stage = activity_stage(match_activity);
@@ -1213,17 +1212,54 @@ impl Render for GainSnapEditor {
             .gap(px(ACTIVITY_LABEL_GAP))
             .children([activity_rail, activity_label]);
 
-        let action_control = div()
+        let output_info = div()
+            .flex()
+            .flex_col()
+            .w(px(ACTION_CONTROL_WIDTH))
+            .gap(px(8.0))
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("OUTPUT"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(solid(ACCENT))
+                            .child(format!("PEAK {output_peak_db:.1} dB")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(solid(RMS_COLOR))
+                            .child(format!("RMS  {output_rms_db:.1} dB")),
+                    ),
+            )
+            .child(activity_status);
+
+        let bottom_controls = div()
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
+            .w(px(ACTION_CONTROL_WIDTH))
+            .gap(px(12.0))
+            .child(manual_control)
+            .child(matching);
+
+        let action_control = div()
+            .flex()
+            .flex_col()
+            .justify_between()
             .w(px(ACTION_CONTROL_WIDTH))
             .h(px(ACTION_CONTROL_HEIGHT))
-            .gap(px(8.0))
-            .child(matching)
-            .child(manual_control)
-            .child(activity_status);
+            .child(output_info)
+            .child(bottom_controls);
 
         div()
             .id("gainsnap-editor")
@@ -1457,6 +1493,30 @@ struct MeterPaintState {
     gain_db: f32,
     focused: bool,
     gain_selected: bool,
+}
+
+fn paint_knob_marker(bounds: Bounds<Pixels>, gain_db: f32, window: &mut Window) {
+    let fraction = ((gain_db.clamp(MANUAL_GAIN_MIN_DB, MANUAL_GAIN_MAX_DB) - MANUAL_GAIN_MIN_DB)
+        / (MANUAL_GAIN_MAX_DB - MANUAL_GAIN_MIN_DB))
+        .clamp(0.0, 1.0);
+    let angle = (-135.0 + fraction * 270.0_f32).to_radians();
+    let center_x = (f32::from(bounds.left()) + f32::from(bounds.right())) * 0.5;
+    let center_y = (f32::from(bounds.top()) + f32::from(bounds.bottom())) * 0.5;
+    let mut marker = gpui::PathBuilder::stroke(px(2.0));
+    for (index, radius) in [25.0_f32, 32.0].into_iter().enumerate() {
+        let position = point(
+            px(center_x + angle.sin() * radius),
+            px(center_y - angle.cos() * radius),
+        );
+        if index == 0 {
+            marker.move_to(position);
+        } else {
+            marker.line_to(position);
+        }
+    }
+    if let Ok(path) = marker.build() {
+        window.paint_path(path, rgba(0xd8d7d399));
+    }
 }
 
 fn paint_meter(bounds: Bounds<Pixels>, state: MeterPaintState, window: &mut Window, cx: &mut App) {

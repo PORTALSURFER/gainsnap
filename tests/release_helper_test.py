@@ -356,6 +356,27 @@ class ReleaseHelperTests(unittest.TestCase):
                     build_id=BUILD_ID,
                 )
 
+    def test_local_macos_nightly_requires_explicit_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clap, vst3, _ = write_archives(root, "0.1.0-nightly.17", windows=False)
+            screenshot, changelog = write_support_files(root)
+            manifest = release_helper.build_manifest(
+                version="0.1.0-nightly.17", package_version="0.1.0",
+                build_id=BUILD_ID, channel="nightly", released_at=RELEASED_AT,
+                git_sha=SOURCE_SHA, clap=clap, vst3=vst3, screenshot=screenshot,
+                changelog=changelog, signing_team_id=TEAM_ID,
+                notary_submissions={"clap": CLAP_NOTARY_ID, "vst3": VST3_NOTARY_ID},
+                allow_macos_only_nightly=True,
+            )
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(len(manifest["artifacts"]), 2)
+            (root / "release-manifest.json").write_bytes(release_helper.canonical_json(manifest))
+            with self.assertRaisesRegex(ValueError, "require manifest schema 3"):
+                release_helper.validate_manifest(manifest, root)
+            release_helper.validate_manifest(manifest, root, allow_macos_only_nightly=True)
+            release_helper.validate_publish_manifest(manifest, root, allow_macos_only_nightly=True)
+
     def test_nightly_schema3_combines_three_artifacts_under_one_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

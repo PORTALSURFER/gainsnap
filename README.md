@@ -92,7 +92,11 @@ VST3_SDK_DIR=/path/to/vst3sdk bash scripts/ci.sh --vst3
 bash scripts/dist.sh --format clap
              VST3_SDK_DIR=/path/to/vst3sdk bash scripts/dist.sh
 
-GitHub Actions release workflows publish signed, notarized, and stapled macOS
+The local macOS nightly path runs CI, Developer ID signing, notarization,
+stapling, and direct PortalSurfer publication without GitHub Actions. See
+[local nightly releases](docs/NIGHTLY_RELEASES.md) for setup and commands.
+
+GitHub Actions release workflows can also publish signed, notarized, and stapled macOS
 arm64 CLAP/VST3 releases. Public production nightlies additionally contain an
 unsigned Windows x86_64 VST3 in one immutable schema-3 manifest. The exact
 Windows archive is

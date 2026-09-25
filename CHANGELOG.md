@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Start the visible meters when the editor opens; keep the fine gain slider
+  independent from the moving meter and allow direct numeric gain entry.
+- Keep gain manual except while Match is active, then retain the matched gain
+  when Match stops; remove background rematching.
+- Add a local macOS nightly path with Developer ID signing, Apple notarization,
+  stapled CLAP/VST3 bundles, and direct PortalSurfer publication.
 - Change RMS Match to retain the strongest complete 300 ms sliding RMS window,
   preventing beat gaps and quieter passages from increasing gain; bound requested
   RMS gain by observed sample-peak headroom before the output safety guard.

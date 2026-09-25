@@ -1,5 +1,56 @@
 # Nightly releases
 
+## Local macOS nightly (current path)
+
+`scripts/local_nightly.py` runs the VST3 and screenshot gates on this Mac,
+builds both arm64 bundles, signs them with an installed Developer ID Application
+identity, submits both to Apple for notarization, staples and audits them, then
+publishes a macOS-only schema-2 nightly directly to PortalSurfer. It does not
+dispatch GitHub Actions. The landing page reads the public release catalog, so
+the verified release appears at `/plugins/gainsnap/` without a site rebuild.
+The Windows VST3 is absent from local nightlies.
+
+Set up local credentials once:
+
+1. Select the intended Developer ID Application fingerprint from
+   `security find-identity -v -p codesigning` and set
+   `APPLE_CODESIGN_IDENTITY` to that 40-character fingerprint.
+2. Run `python3 scripts/local_notary_setup.py` to preview the local Apple key,
+   then rerun with `--execute` in a terminal to enter the issuer ID and store
+   the validated `gainsnap-local` profile in Keychain. Alternatively,
+   set `APPLE_NOTARY_KEY_PATH`, `APPLE_NOTARY_KEY_ID`, and
+   `APPLE_NOTARY_ISSUER_ID` for direct local key use. The key and issuer are
+   never committed to this repository.
+3. Run `python3 scripts/local_publisher_token.py` to preview the one-time
+   publisher rotation, then run it with `--execute`. It sends only a SHA-256
+   hash to the existing server admin wrapper, verifies upload authentication,
+   and stores the new token in macOS Keychain. Rotation retires the old GitHub
+   Actions upload secret; the local token never appears in argv or a plaintext file.
+4. Set `VST3_SDK_DIR` to the pinned VST3 SDK checkout containing
+   `pluginterfaces/`.
+
+From a clean `main` exactly matching `origin/main`:
+
+```bash
+python3 scripts/local_nightly.py            # read-only release plan
+python3 scripts/local_nightly.py --package  # local CI, signing and notarization
+python3 scripts/local_nightly.py --publish  # above, then direct upload and live verification
+```
+
+If the signed package was created but upload failed, retry without rebuilding:
+
+```bash
+python3 scripts/local_nightly.py --publish-existing BUILD_ID
+```
+
+The planner skips a source commit already published as a nightly; `--force`
+creates the next suffix when a deliberate repeat is needed. It refuses a dirty
+checkout, a non-main checkout, or a local main that differs from `origin/main`.
+Each local release keeps its own immutable build ID and an audited manifest in
+`dist/releases/`.
+
+## Hosted GitHub Actions path (legacy)
+
 Use the `GainSnap nightly scheduler` workflow (`nightly.yml`) to prepare and publish a new nightly:
 
 ```bash

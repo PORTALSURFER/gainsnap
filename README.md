@@ -70,8 +70,8 @@ of the moving meter bars. Double-click the value in the knob to type a gain in
 dB. Arrow keys adjust a focused control; Shift makes smaller steps. Editing
 either gain control stops Match. The sample-peak guard still prevents output
 above 0 dBFS. The default editor is
-250 × 424 logical pixels. The activity rail below the output readouts has three short
-stages: Listening, Adjusting, and Matched or Below target. It reports live audio activity
+250 × 424 logical pixels. The three-stage activity rail spans the full width at
+the bottom, while its status text sits below the output readouts. It reports live audio activity
 independently of the Match lifecycle; when Match is off, it shows Manual.
 Matched means the correction has settled. Below target means the
 requested RMS needs more gain than peak headroom or the gain range allows; GainSnap

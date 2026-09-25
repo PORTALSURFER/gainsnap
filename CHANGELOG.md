@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove the OUTPUT heading and span the three-stage activity rail across the
+  bottom of the editor.
 - Put numeric target entry, icon Match, and rematch together below the meter;
   select Peak or RMS from the output readouts and remove Normalize from the UI.
 - Remove the coarse gain caption and place the dial below the controls.

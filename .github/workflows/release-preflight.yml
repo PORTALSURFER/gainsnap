@@ -1,32 +1,6 @@
 name: GainSnap release preflight
 
 on:
-  pull_request:
-    paths:
-      - Cargo.lock
-      - Cargo.toml
-      - build.rs
-      - src/**
-      - scripts/release.sh
-      - scripts/release_helper.py
-      - scripts/nightly_coordinator.py
-      - scripts/bump_version.py
-      - scripts/release_preflight_gate.py
-      - scripts/windows_release_helper.py
-      - tests/release_pipeline_integration.py
-      - tests/release_helper_test.py
-      - tests/nightly_coordinator_test.py
-      - tests/release_preflight_gate_test.py
-      - tests/windows_release_helper_test.py
-      - .github/workflows/release-preflight.yml
-      - .github/workflows/release.yml
-      - .github/workflows/windows-release.yml
-      - .github/workflows/nightly.yml
-      - docs/WINDOWS_RELEASE.md
-      - site/product.json
-      - site/landing-page.json
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

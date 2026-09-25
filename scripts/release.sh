@@ -20,6 +20,8 @@ source_ref=""
 requested_source_sha=""
 windows_release_dir=""
 publisher_script=""
+local_signing=false
+macos_only_nightly=false
 vst3_sdk_revision="58f8da7936800732561402d7936584ca4505de07"
 
 usage() {
@@ -38,11 +40,15 @@ Options:
   --source-sha SHA             Require this exact source SHA
   --windows-release-dir DIR    Validated Windows nightly artifact directory
   --publisher-script PATH      Pinned Node publisher script for --publish
+  --local-signing              Use an installed Developer ID identity and local
+                               notarytool credentials instead of CI secrets
+  --macos-only-nightly         Local nightly with signed macOS CLAP + VST3 only
 
 Production stable/RC remains the macOS arm64 CLAP + VST3 schema-2 path.
-Production nightly additionally requires an unsigned Windows x86_64 VST3 ZIP
-and emits one combined schema-3 manifest. Preflight is macOS-only and uses
-ad-hoc signatures without Apple or PortalSurfer credentials.
+Hosted production nightly additionally requires an unsigned Windows x86_64
+VST3 ZIP and emits a schema-3 manifest. --local-signing with
+--macos-only-nightly emits a signed schema-2 nightly. Preflight uses ad-hoc
+signatures without Apple or PortalSurfer credentials.
 EOF
 }
 
@@ -61,6 +67,8 @@ while [[ $# -gt 0 ]]; do
     --source-sha) requested_source_sha="${2:?missing source sha}"; shift 2 ;;
     --windows-release-dir) windows_release_dir="${2:?missing Windows release directory}"; shift 2 ;;
     --publisher-script) publisher_script="${2:?missing publisher script}"; shift 2 ;;
+    --local-signing) local_signing=true; shift ;;
+    --macos-only-nightly) macos_only_nightly=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -68,14 +76,26 @@ done
 
 [[ -n "${mode}" ]] || { usage >&2; exit 2; }
 [[ "${channel}" == stable || "${channel}" == rc || "${channel}" == nightly ]] || { echo "invalid channel: ${channel}" >&2; exit 2; }
-if [[ -n "${publisher_script}" && "${mode}" != publish ]]; then
-  echo "--publisher-script requires --publish" >&2
+if [[ "${local_signing}" == true && "${mode}" == preflight ]]; then
+  echo "--local-signing is only valid for a production release" >&2
+  exit 2
+fi
+if [[ "${macos_only_nightly}" == true && ( "${mode}" == preflight || "${channel}" != nightly || "${local_signing}" != true ) ]]; then
+  echo "--macos-only-nightly requires a local-signing production nightly" >&2
+  exit 2
+fi
+if [[ -n "${publisher_script}" && ( "${mode}" != publish || "${local_signing}" == true ) ]]; then
+  echo "--publisher-script requires CI-style --publish" >&2
   exit 2
 fi
 if [[ "${mode}" == preflight || "${channel}" != nightly ]]; then
   [[ -z "${windows_release_dir}" ]] || { echo "--windows-release-dir is only valid for a production nightly" >&2; exit 2; }
 else
-  [[ -n "${windows_release_dir}" ]] || { echo "production GainSnap nightly requires --windows-release-dir" >&2; exit 1; }
+  if [[ "${macos_only_nightly}" == true ]]; then
+    [[ -z "${windows_release_dir}" ]] || { echo "macOS-only nightly cannot include a Windows release directory" >&2; exit 2; }
+  else
+    [[ -n "${windows_release_dir}" ]] || { echo "production GainSnap nightly requires --windows-release-dir" >&2; exit 1; }
+  fi
 fi
 [[ "$(uname -s)" == Darwin ]] || { echo "release packaging requires macOS" >&2; exit 1; }
 
@@ -131,10 +151,12 @@ released_at="${released_at:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 if [[ "${mode}" == publish ]]; then
   [[ -n "${PORTALSURFER_RELEASE_TOKEN:-}" ]] || { echo "--publish requires PORTALSURFER_RELEASE_TOKEN (environment only)" >&2; exit 1; }
   [[ "${endpoint}" == "https://portalsurfer.org" ]] || { echo "production publishing requires exact origin https://portalsurfer.org" >&2; exit 1; }
-  [[ -f "${publisher_script}" && ! -L "${publisher_script}" ]] || {
-    echo "production publishing requires the pinned Node publisher script" >&2
-    exit 1
-  }
+  if [[ "${local_signing}" != true ]]; then
+    [[ -f "${publisher_script}" && ! -L "${publisher_script}" ]] || {
+      echo "production publishing requires the pinned Node publisher script" >&2
+      exit 1
+    }
+  fi
 fi
 : "${VST3_SDK_DIR:?VST3_SDK_DIR must point to a VST3 SDK checkout}"
 if [[ ! -d "${VST3_SDK_DIR:-}" ]]; then
@@ -143,14 +165,28 @@ if [[ ! -d "${VST3_SDK_DIR:-}" ]]; then
 fi
 [[ -d "${VST3_SDK_DIR}/pluginterfaces" ]] || { echo "VST3_SDK_DIR must contain pluginterfaces/" >&2; exit 1; }
 if [[ "${mode}" != preflight ]]; then
-  for required in APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD APPLE_NOTARY_KEY_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
-    [[ -n "${!required:-}" ]] || { echo "missing required Apple production credential: ${required}" >&2; exit 1; }
-  done
+  if [[ "${local_signing}" == true ]]; then
+    [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]] || { echo "missing local Apple production setting: APPLE_CODESIGN_IDENTITY" >&2; exit 1; }
+    [[ "${APPLE_CODESIGN_IDENTITY}" == Developer\ ID\ Application:* || "${APPLE_CODESIGN_IDENTITY}" =~ ^[A-Fa-f0-9]{40}$ ]] || { echo "local signing identity must be a Developer ID Application name or fingerprint" >&2; exit 1; }
+    if [[ -z "${APPLE_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+      for required in APPLE_NOTARY_KEY_PATH APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
+        [[ -n "${!required:-}" ]] || { echo "missing local Apple production setting: ${required}" >&2; exit 1; }
+      done
+      [[ -f "${APPLE_NOTARY_KEY_PATH}" && ! -L "${APPLE_NOTARY_KEY_PATH}" ]] || { echo "APPLE_NOTARY_KEY_PATH must be a regular non-symlink file" >&2; exit 1; }
+      [[ "${APPLE_NOTARY_KEY_ID}" =~ ^[A-Z0-9]{10}$ ]] || { echo "APPLE_NOTARY_KEY_ID is invalid" >&2; exit 1; }
+      [[ "${APPLE_NOTARY_ISSUER_ID}" =~ ^[A-Fa-f0-9-]{36}$ ]] || { echo "APPLE_NOTARY_ISSUER_ID is invalid" >&2; exit 1; }
+    fi
+    security find-identity -v -p codesigning | grep -Fq "${APPLE_CODESIGN_IDENTITY}" || { echo "local Developer ID identity is not available" >&2; exit 1; }
+  else
+    for required in APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD APPLE_NOTARY_KEY_BASE64 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID; do
+      [[ -n "${!required:-}" ]] || { echo "missing required Apple production credential: ${required}" >&2; exit 1; }
+    done
+  fi
 fi
 
 windows_release_root=""
 windows_archive_name=""
-if [[ "${mode}" != preflight && "${channel}" == nightly ]]; then
+if [[ "${mode}" != preflight && "${channel}" == nightly && "${macos_only_nightly}" != true ]]; then
   windows_release_root="$(cd "${windows_release_dir}" 2>/dev/null && pwd -P)" || { echo "Windows release directory is not available: ${windows_release_dir}" >&2; exit 1; }
   python3 scripts/windows_release_helper.py validate --root "${windows_release_root}" --cargo-lock Cargo.lock --vst3-sdk-revision "${vst3_sdk_revision}"
   python3 - "${windows_release_root}" "${package_version}" "${publication_version}" "${build_id}" "${released_at}" "${source_sha}" <<'PY'
@@ -201,30 +237,41 @@ fi
 signing_team_id=""
 clap_notary_id=""
 vst3_notary_id=""
+notary_auth=()
 if [[ "${mode}" != preflight ]]; then
-  decode_base64() {
-    if printf '%s' "$1" | base64 --decode > "$2" 2>/dev/null; then return 0; fi
-    printf '%s' "$1" | base64 -D > "$2"
-  }
-  cert_path="${tmp_root}/developer-id-application.p12"
-  notary_key_path="${tmp_root}/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
-  decode_base64 "${APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64}" "${cert_path}"
-  decode_base64 "${APPLE_NOTARY_KEY_BASE64}" "${notary_key_path}"
-  chmod 600 "${cert_path}" "${notary_key_path}"
-  release_keychain="${tmp_root}/gainsnap-release.keychain-db"
-  release_keychain_password="$(uuidgen | tr -d '-')"
-  original_keychains_file="${tmp_root}/original-keychains.txt"
-  security list-keychains -d user | sed 's/[[:space:]]*"//g; s/"$//' > "${original_keychains_file}"
-  while IFS= read -r keychain; do [[ -n "${keychain}" ]] && original_keychains+=("${keychain}"); done < "${original_keychains_file}"
-  security create-keychain -p "${release_keychain_password}" "${release_keychain}" >/dev/null
-  security set-keychain-settings -lut 21600 "${release_keychain}"
-  security unlock-keychain -p "${release_keychain_password}" "${release_keychain}"
-  security list-keychains -d user -s "${release_keychain}" "${original_keychains[@]}" >/dev/null
-  security import "${cert_path}" -P "${APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${release_keychain}" >/dev/null
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${release_keychain_password}" "${release_keychain}" >/dev/null
-  codesign_identity="${APPLE_CODESIGN_IDENTITY:-}"
-  if [[ -z "${codesign_identity}" ]]; then codesign_identity="$(security find-identity -v -p codesigning "${release_keychain}" | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' | head -n 1)"; fi
-  [[ "${codesign_identity}" == Developer\ ID\ Application:* ]] || { echo "no Developer ID Application identity found" >&2; exit 1; }
+  if [[ "${local_signing}" == true ]]; then
+    if [[ -n "${APPLE_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+      notary_auth=(--keychain-profile "${APPLE_NOTARY_KEYCHAIN_PROFILE}")
+    else
+      notary_auth=(--key "${APPLE_NOTARY_KEY_PATH}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}")
+    fi
+    codesign_identity="${APPLE_CODESIGN_IDENTITY}"
+  else
+    decode_base64() {
+      if printf '%s' "$1" | base64 --decode > "$2" 2>/dev/null; then return 0; fi
+      printf '%s' "$1" | base64 -D > "$2"
+    }
+    cert_path="${tmp_root}/developer-id-application.p12"
+    notary_key_path="${tmp_root}/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+    decode_base64 "${APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64}" "${cert_path}"
+    decode_base64 "${APPLE_NOTARY_KEY_BASE64}" "${notary_key_path}"
+    chmod 600 "${cert_path}" "${notary_key_path}"
+    release_keychain="${tmp_root}/gainsnap-release.keychain-db"
+    release_keychain_password="$(uuidgen | tr -d '-')"
+    original_keychains_file="${tmp_root}/original-keychains.txt"
+    security list-keychains -d user | sed 's/[[:space:]]*"//g; s/"$//' > "${original_keychains_file}"
+    while IFS= read -r keychain; do [[ -n "${keychain}" ]] && original_keychains+=("${keychain}"); done < "${original_keychains_file}"
+    security create-keychain -p "${release_keychain_password}" "${release_keychain}" >/dev/null
+    security set-keychain-settings -lut 21600 "${release_keychain}"
+    security unlock-keychain -p "${release_keychain_password}" "${release_keychain}"
+    security list-keychains -d user -s "${release_keychain}" "${original_keychains[@]}" >/dev/null
+    security import "${cert_path}" -P "${APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${release_keychain}" >/dev/null
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${release_keychain_password}" "${release_keychain}" >/dev/null
+    codesign_identity="${APPLE_CODESIGN_IDENTITY:-}"
+    if [[ -z "${codesign_identity}" ]]; then codesign_identity="$(security find-identity -v -p codesigning "${release_keychain}" | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' | head -n 1)"; fi
+    [[ "${codesign_identity}" == Developer\ ID\ Application:* ]] || { echo "no Developer ID Application identity found" >&2; exit 1; }
+    notary_auth=(--key "${notary_key_path}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}")
+  fi
 fi
 
 echo "[release] running VST3 gate"
@@ -263,18 +310,22 @@ EOF
     codesign --force --deep --sign - "${bundle_dir}" >/dev/null
     codesign --verify --deep --strict "${bundle_dir}"
   else
-    codesign --force --deep --timestamp --options runtime --keychain "${release_keychain}" --sign "${codesign_identity}" "${bundle_dir}" >/dev/null
+    if [[ "${local_signing}" == true ]]; then
+      codesign --force --deep --timestamp --options runtime --sign "${codesign_identity}" "${bundle_dir}" >/dev/null
+    else
+      codesign --force --deep --timestamp --options runtime --keychain "${release_keychain}" --sign "${codesign_identity}" "${bundle_dir}" >/dev/null
+    fi
     codesign --verify --deep --strict "${bundle_dir}"
     local notarize_zip="${tmp_root}/notary-${format}.zip"
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${bundle_dir}" "${notarize_zip}"
     local notary_json="${tmp_root}/notary-${format}.json"
-    xcrun notarytool submit "${notarize_zip}" --key "${notary_key_path}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}" --wait --output-format json > "${notary_json}"
+    xcrun notarytool submit "${notarize_zip}" "${notary_auth[@]}" --wait --output-format json > "${notary_json}"
     local notary_status notary_id
     notary_status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "${notary_json}")"
     notary_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id", ""))' "${notary_json}")"
     [[ "${notary_status}" == Accepted && -n "${notary_id}" ]] || { echo "notarization was not accepted for ${format}" >&2; cat "${notary_json}" >&2; exit 1; }
     notary_log="${evidence_dir}/notary-${format}-${notary_id}.json"
-    xcrun notarytool log "${notary_id}" --key "${notary_key_path}" --key-id "${APPLE_NOTARY_KEY_ID}" --issuer "${APPLE_NOTARY_ISSUER_ID}" --output-format json > "${notary_log}"
+    xcrun notarytool log "${notary_id}" "${notary_auth[@]}" --output-format json > "${notary_log}"
     python3 - "${notary_log}" "${format}" <<'PY'
 import json
 import sys
@@ -340,12 +391,12 @@ build_bundle vst3 "${staged}/gainsnap-v${publication_version}-macos.vst3.zip" "$
 audit_zip vst3 "${staged}/gainsnap-v${publication_version}-macos.vst3.zip"
 cp CHANGELOG.md "${staged}/CHANGELOG.md"
 
-python3 - "${staged}" "${publication_version}" "${package_version}" "${build_id}" "${channel}" "${released_at}" "${source_sha}" "${mode}" "${signing_team_id}" "${clap_notary_id}" "${vst3_notary_id}" "${windows_archive_name}" <<'PY'
+python3 - "${staged}" "${publication_version}" "${package_version}" "${build_id}" "${channel}" "${released_at}" "${source_sha}" "${mode}" "${signing_team_id}" "${clap_notary_id}" "${vst3_notary_id}" "${windows_archive_name}" "${macos_only_nightly}" <<'PY'
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path("scripts").resolve()))
 from release_helper import build_manifest, canonical_json, validate_preflight_manifest, validate_manifest
-root, publication, package, build, channel, released_at, source, mode, team, clap_notary, vst3_notary, windows_name = sys.argv[1:]
+root, publication, package, build, channel, released_at, source, mode, team, clap_notary, vst3_notary, windows_name, macos_only = sys.argv[1:]
 folder = pathlib.Path(root)
 kwargs = dict(publication_version=publication, package_version=package, build_id=build, channel=channel, released_at=released_at, git_sha=source, clap=folder / f"gainsnap-v{publication}-macos.clap.zip", vst3=folder / f"gainsnap-v{publication}-macos.vst3.zip", screenshot=folder / "gainsnap-default-250x424.png", changelog=folder / "CHANGELOG.md")
 if mode == "preflight":
@@ -354,14 +405,26 @@ if mode == "preflight":
     (folder / "release-manifest.json").write_bytes(canonical_json(manifest))
     validate_preflight_manifest(manifest, folder, package_version=package)
 else:
-    manifest = build_manifest(**kwargs, distribution="production", signing_identity_class="Developer ID Application", notarized=True, stapled=True, signing_team_id=team, notary_submissions={"clap": clap_notary, "vst3": vst3_notary}, windows_vst3=folder / windows_name if windows_name else None)
+    manifest = build_manifest(**kwargs, distribution="production", signing_identity_class="Developer ID Application", notarized=True, stapled=True, signing_team_id=team, notary_submissions={"clap": clap_notary, "vst3": vst3_notary}, windows_vst3=folder / windows_name if windows_name else None, allow_macos_only_nightly=macos_only == "true")
     (folder / "release-manifest.json").write_bytes(canonical_json(manifest))
-    validate_manifest(manifest, folder, package_version=package)
+    validate_manifest(manifest, folder, package_version=package, allow_macos_only_nightly=macos_only == "true")
 PY
 
 mv "${staged}" "${release_dir}"
 if [[ "${mode}" == publish ]]; then
-  node "${publisher_script}" --manifest "${release_dir}/release-manifest.json" --root "${release_dir}" --endpoint "${endpoint}"
+  if [[ "${local_signing}" == true ]]; then
+    python3 - "${release_dir}" "${package_version}" "${macos_only_nightly}" <<'PY'
+import os
+import pathlib
+import sys
+sys.path.insert(0, str(pathlib.Path("scripts").resolve()))
+from release_helper import publish_release
+root = pathlib.Path(sys.argv[1])
+publish_release(endpoint="https://portalsurfer.org", token=os.environ["PORTALSURFER_RELEASE_TOKEN"], manifest_path=root / "release-manifest.json", root=root, repo_root=pathlib.Path.cwd(), package_version=sys.argv[2], allow_macos_only_nightly=sys.argv[3] == "true")
+PY
+  else
+    node "${publisher_script}" --manifest "${release_dir}/release-manifest.json" --root "${release_dir}" --endpoint "${endpoint}"
+  fi
 fi
 
 echo "[release] bundle ready: ${release_dir}"

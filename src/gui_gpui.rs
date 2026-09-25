@@ -1152,12 +1152,6 @@ impl Render for GainSnapEditor {
             .child(
                 div()
                     .text_size(px(10.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child("RIGHT: FINE"),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
                     .text_color(solid(ACCENT))
                     .child(format!("PEAK {output_peak_db:.1} dB")),
             )

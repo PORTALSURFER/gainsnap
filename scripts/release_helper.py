@@ -702,6 +702,7 @@ def build_manifest(
     clap_notary_id: Optional[str] = None,
     vst3_notary_id: Optional[str] = None,
     windows_vst3: Optional[Path] = None,
+    allow_macos_only_nightly: bool = False,
 ) -> dict[str, Any]:
     if product != PRODUCT or repository != REPOSITORY:
         raise ValueError("unknown or mismatched Portal product")
@@ -717,7 +718,7 @@ def build_manifest(
     else:
         validate_publication_version(package_version, publication_version, channel)
     if windows_vst3 is None:
-        if channel == "nightly" and distribution == "production":
+        if channel == "nightly" and distribution == "production" and not allow_macos_only_nightly:
             raise ValueError("production GainSnap nightly requires the Windows artifact")
         return _build_schema2_manifest(
             version=publication_version,
@@ -760,6 +761,7 @@ def _validate_schema2_manifest(
     *,
     require_production: bool,
     package_version: Optional[str] = None,
+    allow_macos_only_nightly: bool = False,
 ) -> None:
     required = {
         "schema_version",
@@ -821,7 +823,7 @@ def _validate_schema2_manifest(
             raise ValueError("publish requires production Developer ID notarized provenance")
     else:
         raise ValueError("manifest distribution is invalid")
-    if distribution == "production" and manifest["channel"] == "nightly":
+    if distribution == "production" and manifest["channel"] == "nightly" and not allow_macos_only_nightly:
         raise ValueError("production GainSnap nightlies require manifest schema 3")
 
     artifacts = manifest["artifacts"]
@@ -1057,7 +1059,8 @@ def _validate_schema3_manifest(
 
 
 def validate_manifest(
-    manifest: Mapping[str, Any], root: Path, *, package_version: Optional[str] = None
+    manifest: Mapping[str, Any], root: Path, *, package_version: Optional[str] = None,
+    allow_macos_only_nightly: bool = False,
 ) -> None:
     if not isinstance(manifest, Mapping):
         raise ValueError("manifest must be an object")
@@ -1068,6 +1071,7 @@ def validate_manifest(
             root,
             require_production=manifest.get("distribution") == "production",
             package_version=package_version,
+            allow_macos_only_nightly=allow_macos_only_nightly,
         )
     elif schema == MANIFEST_SCHEMA_V3:
         _validate_schema3_manifest(manifest, root, package_version=package_version)
@@ -1286,6 +1290,7 @@ def validate_publish_manifest(
     *,
     require_production: bool = True,
     package_version: Optional[str] = None,
+    allow_macos_only_nightly: bool = False,
 ) -> None:
     if manifest.get("schema_version") != MANIFEST_SCHEMA_V2 or manifest.get("product") != PRODUCT:
         raise ValueError("publish requires GainSnap manifest schema 2")
@@ -1294,6 +1299,7 @@ def validate_publish_manifest(
         root,
         require_production=require_production,
         package_version=package_version,
+        allow_macos_only_nightly=allow_macos_only_nightly,
     )
 
 
@@ -1306,6 +1312,7 @@ def publish_release(
     root: Optional[Path] = None,
     repo_root: Optional[Path] = None,
     package_version: Optional[str] = None,
+    allow_macos_only_nightly: bool = False,
     transport: Transport = _request,
 ) -> None:
     """Validate and publish one production schema-2 GainSnap manifest."""
@@ -1336,7 +1343,7 @@ def publish_release(
     source_root = Path(repo_root) if repo_root is not None else Path.cwd()
     if manifest.get("schema_version") != MANIFEST_SCHEMA_V2:
         raise ValueError("the Python publisher supports GainSnap schema 2 manifests only")
-    validate_publish_manifest(manifest, artifact_root, package_version=package_version)
+    validate_publish_manifest(manifest, artifact_root, package_version=package_version, allow_macos_only_nightly=allow_macos_only_nightly)
     _validate_exact_manifest_names(manifest)
     _validate_canonical_source(manifest, source_root)
     expected_team = manifest["signing"]["team_id"]

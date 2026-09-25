@@ -675,7 +675,7 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag(fixture.window, 185.0, 185.0, 165.0);
+        send_drag(fixture.window, 185.0, 235.0, 215.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             (params.manual_gain_db() - 10.99).abs() < 0.01,
@@ -689,7 +689,7 @@ mod macos {
         assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
         assert_eq!(params.target_db(), target_before_manual);
 
-        send_double_click(fixture.window, 185.0, 200.0);
+        send_double_click(fixture.window, 185.0, 210.0);
         pump_appkit(app, &gui, 0.03);
         let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
         write_capture(&output_root(), "gain-entry", w, h, pixels);

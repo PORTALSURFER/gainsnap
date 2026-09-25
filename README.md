@@ -71,8 +71,8 @@ dB. Arrow keys adjust a focused control; Shift makes smaller steps. Editing
 either gain control stops Match. The sample-peak guard still prevents output
 above 0 dBFS. The default editor is
 250 × 424 logical pixels. The three-stage activity rail spans the full width at
-the bottom, while its status text sits below the output readouts. It reports live audio activity
-independently of the Match lifecycle; when Match is off, it shows Manual.
+the bottom, while its status text sits below the output readouts during Match.
+The status text disappears when Match is off.
 Matched means the correction has settled. Below target means the
 requested RMS needs more gain than peak headroom or the gain range allows; GainSnap
 does not compress or limit the transients to reach it. RMS matching uses the strongest measured 300 ms window; the

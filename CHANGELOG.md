@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Hide the Manual activity label when Match is off.
 - Remove the OUTPUT heading and span the three-stage activity rail across the
   bottom of the editor.
 - Put numeric target entry, icon Match, and rematch together below the meter;

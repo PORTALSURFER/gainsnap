@@ -1135,11 +1135,7 @@ impl Render for GainSnapEditor {
             .font(font("Ioskeley Mono"))
             .text_size(px(11.0))
             .line_height(px(12.0))
-            .child(if match_requested {
-                activity_label_text(match_activity)
-            } else {
-                "Manual"
-            });
+            .child(activity_label_text(match_activity));
         let peak_focus = self.peak_focus_handle.clone();
         let peak_readout = div()
             .id("peak-mode")
@@ -1228,7 +1224,7 @@ impl Render for GainSnapEditor {
                     .child(peak_readout)
                     .child(rms_readout),
             )
-            .child(activity_label);
+            .when(match_requested, |element| element.child(activity_label));
 
         let bottom_controls = div()
             .flex()

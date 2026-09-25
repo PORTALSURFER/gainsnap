@@ -696,7 +696,7 @@ mod macos {
 
         // The output readouts select the matching mode without a separate
         // toggle button. Enter repeats the focused radio selection.
-        send_click(fixture.window, 143.0, 64.0);
+        send_click(fixture.window, 143.0, 42.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.rms_mode(), "RMS readout should select RMS matching");
         send_key(app, fixture.window, &gui, "\r", 36, 0);
@@ -704,7 +704,7 @@ mod macos {
             params.rms_mode(),
             "Enter should preserve focused RMS selection"
         );
-        send_click(fixture.window, 143.0, 45.0);
+        send_click(fixture.window, 143.0, 24.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             !params.rms_mode(),

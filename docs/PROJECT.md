@@ -20,7 +20,7 @@ peak guard retains the previous ceiling during the outgoing fade, then caps
 Peak-mode matching at the target, with immediate attack and 100 ms recovery. The fade continues if Match
 is disabled early. Output metering includes this protection.
 The startup fade follows the peak guard, bounding strong bursts throughout the
-fade. The 250 × 424 editor has a three-stage activity rail
+fade. The 250 × 424 editor has a full-width three-stage activity rail at the bottom
 that reports Listening, Adjusting, Matched, or Below target while Match runs and Manual after
 it stops. A short correction telemetry
 hold keeps Adjusting visible for about 200 ms. Both macOS and Windows use

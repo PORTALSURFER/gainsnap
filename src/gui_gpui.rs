@@ -56,8 +56,8 @@ const MATCH_ROW_GAP: f32 = 3.0;
 const ACTIVITY_RAIL_HEIGHT: f32 = 6.0;
 const ACTIVITY_RAIL_GAP: f32 = 3.0;
 const ACTIVITY_SEGMENT_HEIGHT: f32 = 4.0;
+const ACTIVITY_RAIL_BOTTOM_INSET: f32 = 2.0;
 const ACTIVITY_LABEL_HEIGHT: f32 = 14.0;
-const ACTIVITY_LABEL_GAP: f32 = 4.0;
 const TARGET_METER_TRACK_WIDTH: f32 = 22.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
 const TARGET_METER_TICK_COUNT: usize = 13;
@@ -1099,10 +1099,13 @@ impl Render for GainSnapEditor {
             .child(div().w(px(58.0)).h(px(22.0)).child(self.gain_input.clone()));
         let active_stage = activity_stage(match_activity);
         let segment_width =
-            (ACTION_CONTROL_WIDTH - ACTIVITY_RAIL_GAP * 2.0) / ACTIVITY_SEGMENT_COUNT as f32;
+            (WINDOW_WIDTH as f32 - ACTIVITY_RAIL_GAP * 2.0) / ACTIVITY_SEGMENT_COUNT as f32;
         let mut activity_rail = div()
             .id("activity-rail")
-            .w(px(ACTION_CONTROL_WIDTH))
+            .absolute()
+            .bottom(px(ACTIVITY_RAIL_BOTTOM_INSET))
+            .left(px(0.0))
+            .w(px(WINDOW_WIDTH as f32))
             .h(px(ACTIVITY_RAIL_HEIGHT))
             .flex()
             .items_center()
@@ -1137,17 +1140,6 @@ impl Render for GainSnapEditor {
             } else {
                 "Manual"
             });
-        let activity_status = div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .w(px(ACTION_CONTROL_WIDTH))
-            .h(px(ACTIVITY_RAIL_HEIGHT
-                + ACTIVITY_LABEL_GAP
-                + ACTIVITY_LABEL_HEIGHT))
-            .gap(px(ACTIVITY_LABEL_GAP))
-            .children([activity_rail, activity_label]);
-
         let peak_focus = self.peak_focus_handle.clone();
         let peak_readout = div()
             .id("peak-mode")
@@ -1231,18 +1223,12 @@ impl Render for GainSnapEditor {
             .gap(px(8.0))
             .child(
                 div()
-                    .text_size(px(10.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child("OUTPUT"),
-            )
-            .child(
-                div()
                     .flex()
                     .flex_col()
                     .child(peak_readout)
                     .child(rms_readout),
             )
-            .child(activity_status);
+            .child(activity_label);
 
         let bottom_controls = div()
             .flex()
@@ -1262,6 +1248,7 @@ impl Render for GainSnapEditor {
 
         div()
             .id("gainsnap-editor")
+            .relative()
             .w(px(WINDOW_WIDTH as f32))
             .h(px(WINDOW_HEIGHT as f32))
             .flex()
@@ -1279,6 +1266,7 @@ impl Render for GainSnapEditor {
             .on_key_down(cx.listener(Self::handle_key_down))
             .child(target_control)
             .child(action_control)
+            .child(activity_rail)
     }
 }
 

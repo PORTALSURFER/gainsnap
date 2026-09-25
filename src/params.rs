@@ -115,7 +115,7 @@ pub const PARAM_DEFS: [ParamDef; 6] = [
         module: b"Match",
         min: 0.0,
         max: 1.0,
-        default: 0.0,
+        default: 1.0,
         automatable: true,
         stepped: true,
     },
@@ -184,7 +184,7 @@ impl GainSnapParams {
         Self {
             target_db: AtomicF32::new(DEFAULT_TARGET_DB),
             match_request: AtomicU32::new(0),
-            rms_mode: AtomicU32::new(0),
+            rms_mode: AtomicU32::new(1),
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
             manual_gain_db: AtomicF32::new(0.0),
             manual_mode: AtomicU32::new(0),
@@ -435,7 +435,7 @@ pub fn vst3_param_info_for_index(index: i32) -> Option<Vst3ParamInfo> {
             short_title: "Mode",
             units: "",
             step_count: 1,
-            default_normalized: 0.0,
+            default_normalized: 1.0,
             automatable: true,
         }),
         4 => Some(Vst3ParamInfo {
@@ -513,7 +513,7 @@ mod tests {
     fn mode_has_a_new_stable_host_id_and_enumerated_values() {
         assert_eq!(PARAM_DEFS.map(|def| def.id.get()), [1, 2, 3, 4, 5, 6]);
         let params = GainSnapParams::new();
-        assert!(!params.rms_mode());
+        assert!(params.rms_mode());
         params.set_param(PARAM_RMS_MODE, 1.0);
         assert_eq!(params.get_param(PARAM_RMS_MODE), Some(1.0));
         assert_eq!(text_to_value(PARAM_RMS_MODE, c"RMS"), Some(1.0));
@@ -530,7 +530,9 @@ mod tests {
         assert_eq!(text_to_value(PARAM_MANUAL_MODE, c"Manual"), Some(1.0));
         #[cfg(feature = "vst3")]
         {
-            assert_eq!(vst3_param_info_for_index(3).unwrap().step_count, 1);
+            let mode_info = vst3_param_info_for_index(3).unwrap();
+            assert_eq!(mode_info.step_count, 1);
+            assert_eq!(mode_info.default_normalized, 1.0);
             let gain_info = vst3_param_info_for_index(2).unwrap();
             assert!((gain_info.default_normalized - 36.0 / 156.0).abs() < 1.0e-12);
             assert_eq!(

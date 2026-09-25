@@ -39,6 +39,8 @@ pub enum MatchActivity {
     Adjusting = 4,
     /// Match is enabled and the correction has settled.
     Matched = 5,
+    /// Match cannot reach the selected RMS target with the available peak headroom or gain range.
+    BelowTarget = 6,
 }
 
 impl MatchActivity {
@@ -63,6 +65,7 @@ impl MatchActivity {
             3 => Self::Listening,
             4 => Self::Adjusting,
             5 => Self::Matched,
+            6 => Self::BelowTarget,
             _ => Self::Ready,
         }
     }

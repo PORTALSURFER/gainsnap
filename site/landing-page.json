@@ -4,11 +4,11 @@
   "name": "GainSnap",
   "category": "Utility",
   "summary": "Peak and RMS level matching for your DAW",
-  "description": "GainSnap measures an incoming track peak while Match is enabled, continuously applies the gain needed to reach a chosen target while Match is enabled, and holds that gain when Match is disabled. Normalize sets the target to 0 dBFS and starts Match in one click. The vertical meter shows a smoothed orange output peak with a dB scale. A small triangle beside the meter marks the target and acts as the target control.",
+  "description": "GainSnap measures the selected Peak or RMS level while Match is enabled, adjusts gain toward the target, and holds that gain when Match is disabled. Choose Peak or RMS from the output readouts, enter a target below the meter, and use the adjacent Match and rematch icons. The vertical meter shows output Peak and RMS in separate colors, with a target line and gain marker.",
   "features": [
     "Live peak matching with a protected fade-in",
     "Compact output meter and pulsing Match controls",
-    "One-click normalization to 0 dBFS"
+    "Direct target entry and matching"
   ],
   "formats": [
     "CLAP",

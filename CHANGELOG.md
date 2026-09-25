@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Put numeric target entry, icon Match, and rematch together below the meter;
+  select Peak or RMS from the output readouts and remove Normalize from the UI.
+- Remove the coarse gain caption and place the dial below the controls.
+- Show Below target when RMS peak headroom or the gain range prevents reaching
+  the target while preserving transient shape; default new instances to RMS.
 - Group output levels and match status at the top of the editor, place the
   coarse gain dial and action buttons at the bottom, and show the dial position.
 - Start the visible meters when the editor opens; keep the fine gain slider
@@ -14,7 +19,6 @@
   preventing beat gaps and quieter passages from increasing gain; bound requested
   RMS gain by observed sample-peak headroom before the output safety guard.
 - Add a saved, automatable PEAK/RMS mode toggle with RMS-based live matching and output metering.
-- Keep Normalize as peak normalization, automatically selecting PEAK mode.
 
 - Fade playing audio down briefly before starting Match, avoiding the immediate mute that caused clicks; preserve the audible gain through rapid restarts and target edits.
 - Improve gain-smoothing precision at high sample rates.

@@ -63,11 +63,12 @@ the meter accepts direct dBFS entry as well.
 
 The tall meter shows the output peak in orange and RMS in teal, with numeric
 readouts beside it. The left arrow and horizontal line set the target. Select
-Peak or RMS to choose which level Match uses. Drag the round gain control from
-its outer ring for coarse adjustments, or drag the right meter arrow for fine
-adjustments. The arrow sits at −12 dB when Gain is 0 dB and stays independent
-of the moving meter bars. Double-click the value in the knob to type a gain in
-dB. Arrow keys adjust a focused control; Shift makes smaller steps. Editing
+Peak or RMS to choose which level Match uses. Drag the thick inner ring of the
+round gain control for coarse adjustments, even beyond the editor, or drag the
+right meter arrow for fine adjustments. The arrow sits at −12 dB when Gain is
+0 dB and stays independent of the moving meter bars. Double-click the value
+beneath the knob to type a gain in dB. Arrow keys adjust a focused control;
+Shift makes smaller steps. Editing
 either gain control stops Match. The sample-peak guard still prevents output
 above 0 dBFS. The default editor is
 250 × 424 logical pixels. The three-stage activity rail spans the full width at

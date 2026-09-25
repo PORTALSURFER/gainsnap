@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep coarse knob drags active outside the editor, add a thicker inner grab
+  ring, and move the editable gain value below the knob.
 - Hide the Manual activity label when Match is off.
 - Remove the OUTPUT heading and span the three-stage activity rail across the
   bottom of the editor.

@@ -264,8 +264,16 @@ mod macos {
     }
 
     unsafe fn send_drag(window: id, x: f64, start_y: f64, end_y: f64) {
+        send_drag_to(window, x, start_y, x, end_y);
+    }
+
+    unsafe fn send_drag_to(window: id, start_x: f64, start_y: f64, end_x: f64, end_y: f64) {
         let window_number: isize = msg_send![window, windowNumber];
-        for (event_type, y) in [(1_usize, start_y), (6_usize, end_y), (2_usize, end_y)] {
+        for (event_type, x, y) in [
+            (1_usize, start_x, start_y),
+            (6_usize, end_x, end_y),
+            (2_usize, end_x, end_y),
+        ] {
             let event: id = msg_send![class!(NSEvent),
                 mouseEventWithType: event_type
                 location: NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - y)
@@ -655,7 +663,7 @@ mod macos {
 
         // The knob and right marker both edit the same gain parameter.
         let target_before_manual = params.target_db();
-        send_click(fixture.window, 185.0, 390.0);
+        send_click(fixture.window, 185.0, 350.0);
         pump_appkit(app, &gui, 0.03);
         assert!(!params.match_requested());
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
@@ -670,11 +678,11 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag(fixture.window, 185.0, 390.0, 370.0);
+        send_drag_to(fixture.window, 185.0, 322.0, 300.0, 302.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             (params.manual_gain_db() - 10.99).abs() < 0.01,
-            "coarse drag gain {}",
+            "coarse drag must continue outside the editor: {}",
             params.manual_gain_db()
         );
         let gain_before_fine_drag = params.manual_gain_db();
@@ -684,7 +692,7 @@ mod macos {
         assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
         assert_eq!(params.target_db(), target_before_manual);
 
-        send_double_click(fixture.window, 185.0, 373.0);
+        send_double_click(fixture.window, 185.0, 398.0);
         pump_appkit(app, &gui, 0.03);
         let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
         write_capture(&output_root(), "gain-entry", w, h, pixels);

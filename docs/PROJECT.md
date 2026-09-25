@@ -3,7 +3,8 @@
 ## Summary
 
 GainSnap starts with manual Gain at 0 dB. The round knob and right meter arrow
-edit one shared Gain parameter; the knob value accepts direct text entry. Match
+edit one shared Gain parameter. The knob has a thick inner grab ring, keeps
+tracking drags beyond the editor, and places its editable value beneath it. Match
 temporarily adjusts that same parameter to the selected Peak or RMS target.
 Stopping Match freezes the gain, with no held rematch. The target entry, Match,
 and rematch icons share a row below the meter. The tall meter shows output Peak

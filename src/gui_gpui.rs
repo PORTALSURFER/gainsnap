@@ -58,6 +58,8 @@ const ACTIVITY_RAIL_GAP: f32 = 3.0;
 const ACTIVITY_SEGMENT_HEIGHT: f32 = 4.0;
 const ACTIVITY_RAIL_BOTTOM_INSET: f32 = 2.0;
 const ACTIVITY_LABEL_HEIGHT: f32 = 14.0;
+const KNOB_GRAB_RING_SIZE: f32 = 52.0;
+const KNOB_VALUE_GAP: f32 = 4.0;
 const TARGET_METER_TRACK_WIDTH: f32 = 22.0;
 const TARGET_METER_VERTICAL_INSET: f32 = 2.0;
 const TARGET_METER_TICK_COUNT: usize = 13;
@@ -1083,9 +1085,6 @@ impl Render for GainSnapEditor {
             .aria_label("Coarse manual gain, drag vertically or use arrow keys")
             .track_focus(&self.knob_focus_handle)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::knob_mouse_down))
-            .on_mouse_move(cx.listener(Self::knob_mouse_move))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::knob_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::knob_mouse_up))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -1096,6 +1095,20 @@ impl Render for GainSnapEditor {
                 .absolute()
                 .size_full(),
             )
+            .child(
+                div()
+                    .w(px(KNOB_GRAB_RING_SIZE))
+                    .h(px(KNOB_GRAB_RING_SIZE))
+                    .rounded_full()
+                    .border_3()
+                    .border_color(solid(BORDER_EMPHASIS)),
+            );
+        let knob_control = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(KNOB_VALUE_GAP))
+            .child(knob)
             .child(div().w(px(58.0)).h(px(22.0)).child(self.gain_input.clone()));
         let active_stage = activity_stage(match_activity);
         let segment_width =
@@ -1231,7 +1244,7 @@ impl Render for GainSnapEditor {
             .items_center()
             .justify_center()
             .w(px(ACTION_CONTROL_WIDTH))
-            .child(knob);
+            .child(knob_control);
 
         let action_control = div()
             .flex()
@@ -1241,6 +1254,25 @@ impl Render for GainSnapEditor {
             .h(px(ACTION_CONTROL_HEIGHT))
             .child(output_info)
             .child(bottom_controls);
+        let knob_move = cx.listener(Self::knob_mouse_move);
+        let knob_up = cx.listener(Self::knob_mouse_up);
+        let drag_events = canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == gpui::DispatchPhase::Capture {
+                        knob_move(event, window, cx);
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == gpui::DispatchPhase::Capture && event.button == MouseButton::Left {
+                        knob_up(event, window, cx);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full();
 
         div()
             .id("gainsnap-editor")
@@ -1263,6 +1295,7 @@ impl Render for GainSnapEditor {
             .child(target_control)
             .child(action_control)
             .child(activity_rail)
+            .child(drag_events)
     }
 }
 

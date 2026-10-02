@@ -34,6 +34,7 @@ toybox = { git = "https://github.com/PORTALSURFER/toybox.git", rev = "c3cdf63d4d
 cocoa = "0.26"
 objc = "0.2"
 raw-window-handle = "0.5.2"
+raw-window-handle-06 = { package = "raw-window-handle", version = "0.6" }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,24 @@
+/* Device-sized review workspace; expanded tools remain available on demand. */
+html, body { min-height:0; }
+.app { height:auto; min-height:0; align-items:center; }
+.topbar,.review-toolbar,.revision-toolbar,footer { width:100%; }
+.topbar { min-height:0; padding:8px 12px; gap:8px; }
+.brand { display:none; }
+.tools { justify-content:flex-start; gap:6px; }
+.stage { flex:0 0 auto; min-height:0; width:264px; height:448px; padding:12px; margin:8px 0; background:#1B211E; }
+.board { box-shadow:none; }
+.review-toolbar,.revision-toolbar { padding:6px 12px; }
+footer { padding:6px 12px; }
+body:not(.expanded-tools) .tools > :not(.design-size):not(.feedback-tools):not(#device-tools-toggle):not(#view-styleguide) { display:none; }
+body:not(.expanded-tools) #tool-pan, body:not(.expanded-tools) #tool-select { display:none; }
+body:not(.expanded-tools) .review-toolbar > :not(label):not(#check-design):not(#zoom-value) { display:none; }
+body:not(.expanded-tools) .review-toolbar label:has(#image-feedback) { display:none; }
+body:not(.expanded-tools) .revision-toolbar > :not(label) { display:none; }
+body:not(.expanded-tools) footer #instructions { display:none; }
+
+/* Let the design pane occupy remaining space; status stays a thin footer. */
+.app { height:100dvh; min-height:0; }
+.stage { flex:1 1 0; width:100%; height:auto; min-height:0; margin:0; }
+footer { flex:0 0 24px; min-height:24px; height:24px; padding:3px 12px; overflow:hidden; }
+body:not(.expanded-tools) #feedback-instructions { display:none; }
+body.expanded-tools footer { flex-basis:auto; height:auto; }

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GainSnap — Frame redesign</title>
+  <link rel="stylesheet" href="style.css?rev=gainsnap-r24">
+  <script src="frame.js" defer></script>
+  <script src="design-document.js?render=vertical-center-3" defer></script>
+  <script src="design-tools.js" defer></script>
+  <script src="design-review.js" defer></script>
+  <script src="revision-tools.js" defer></script>
+  <script src="styleguides/technical-futurist.js?guide=inputs-2" defer></script>
+  <script src="styleguide-picker.js" defer></script>
+  <script src="feedback.js" defer></script>
+  <script src="../gainsnap.js?render=vertical-center-3" defer></script>
+  <script src="app.js" defer></script>
+  <script src="review-tools.js?rev=gainsnap-r24" defer></script>
+  <link rel="stylesheet" href="device-fit.css?rev=gainsnap-r24">
+  <script src="device-fit.js?rev=gainsnap-r24" defer></script>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">F</span><div><strong>FRAME</strong><small>UI DESIGN CANVAS</small></div></div>
+      <div class="tools" role="group" aria-label="Design and feedback controls">
+        <label class="design-choice">Design <select id="design-picker" aria-label="Design"></select></label>
+        <label class="design-choice styleguide-choice">Styleguide <select id="styleguide-picker" aria-label="Styleguide"></select></label>
+        <button id="view-styleguide" type="button" disabled>View guide</button>
+        <span id="design-size" class="design-size"></span>
+        <div class="feedback-tools" role="group" aria-label="Feedback tools">
+          <button id="tool-pen" type="button" data-feedback-tool="pen" aria-pressed="true" aria-keyshortcuts="P">Pen</button>
+          <button id="tool-note" type="button" data-feedback-tool="note" aria-pressed="false" aria-keyshortcuts="N">Note</button>
+          <button id="tool-pan" type="button" data-feedback-tool="pan" aria-pressed="false" aria-keyshortcuts="H">Pan</button>
+          <button id="tool-interact" type="button" data-feedback-tool="interact" aria-pressed="false" aria-keyshortcuts="I">Interact</button>
+          <button id="tool-select" type="button" data-feedback-tool="select" aria-pressed="false" aria-keyshortcuts="V">Select</button>
+        </div>
+        <button id="undo" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
+        <button id="redo" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
+        <button id="resolve-selected" type="button" disabled>Mark resolved</button>
+        <label class="design-choice">Feedback <select id="feedback-filter" aria-label="Feedback status filter"><option value="all">All marks</option><option value="open">Open</option><option value="resolved">Resolved</option></select></label>
+        <button id="delete-selected" type="button" disabled aria-keyshortcuts="Delete Backspace">Delete selected</button>
+        <button id="clear" type="button" disabled>Clear feedback</button>
+        <button id="import-feedback" type="button">Import feedback</button>
+        <button id="download" type="button" disabled>Download feedback</button>
+        <button id="retry-save" type="button" hidden>Retry save</button>
+      </div>
+    </header>
+    <div class="review-toolbar" role="group" aria-label="Design review">
+      <label>Viewport <select id="viewport-picker" aria-label="Viewport"><option value="custom">Design size</option><option value="desktop">Desktop · 1000 × 700</option><option value="tablet">Tablet · 768 × 1024</option><option value="phone">Phone · 360 × 740</option></select></label>
+      <label>State <select id="state-picker" aria-label="Interface state"></select></label>
+      <button id="zoom-out" type="button" aria-label="Zoom out">−</button><output id="zoom-value" aria-live="polite">100%</output><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="fit-view" type="button">Fit</button>
+      <button id="check-design" type="button">Check design</button>
+      <label><input id="image-feedback" type="checkbox"> Include feedback</label><button id="download-image" type="button">Download PNG</button>
+      <span id="review-action-status" role="status"></span>
+    </div>
+    <div class="revision-toolbar" role="group" aria-label="Revisions and project">
+      <label>Revision <select id="revision-picker" aria-label="Revision"></select></label>
+      <button id="restore-revision" type="button">Restore revision</button><button id="compare-revisions" type="button">Compare</button>
+      <button id="download-project" type="button">Download project</button><button id="import-project" type="button">Import project</button>
+      <button id="retry-project-save" type="button" hidden>Retry project save</button>
+      <span id="project-save-notice" role="status"></span><span id="feedback-revision-notice" role="status"></span>
+    </div>
+    <div class="stage" id="stage">
+      <section id="design-status" class="design-status" role="status" hidden>
+        <h1 id="design-status-title"></h1>
+        <p id="design-status-message"></p>
+        <details hidden><summary>Error details</summary><pre id="design-error-details"></pre></details>
+        <button id="retry-render" type="button" hidden>Retry render</button>
+      </section>
+      <div class="board" id="board" aria-label="Interface design">
+        <div id="prototype-controls" class="prototype-controls" hidden></div>
+        <canvas id="design" class="design" role="img" aria-label="Painted interface"></canvas>
+      </div>
+      <svg id="brush" class="brush" tabindex="0" role="group" aria-describedby="feedback-instructions" preserveAspectRatio="none" aria-label="Draw red feedback lines anywhere on the canvas"></svg>
+      <div id="keyboard-cursor" class="keyboard-cursor" aria-hidden="true" hidden></div>
+      <div id="notes-layer" class="notes-layer" aria-label="Placed feedback notes"></div>
+    </div>
+    <footer>
+      <div>
+        <span id="feedback-instructions">Draw red lines anywhere. Hold Shift for a straight line. Marks save per design in this browser.</span>
+        <span id="selection-status" role="status" aria-live="polite"></span>
+        <span id="feedback-limit-notice" role="status" aria-live="polite" aria-atomic="true"></span>
+        <span id="feedback-save-notice" role="status" aria-live="polite" aria-atomic="true"></span>
+        <details id="styleguide-registration-notice" hidden><summary>Styleguide registration errors</summary><pre id="styleguide-registration-errors"></pre></details>
+        <details id="registration-notice" hidden>
+          <summary id="registration-summary"></summary>
+          <pre id="registration-errors"></pre>
+        </details>
+      </div>
+      <span id="mark-count">0 lines</span>
+    </footer>
+  </main>
+  <dialog id="compare-dialog" aria-labelledby="compare-title" data-text-editor>
+    <h2 id="compare-title">Compare revisions</h2><label>Before <select id="compare-before" aria-label="Before revision"></select></label><label>After <select id="compare-after" aria-label="After revision"></select></label>
+    <label><input id="compare-overlay" type="checkbox"> Overlay revisions</label><pre id="compare-summary"></pre>
+    <div id="revision-canvases"><canvas id="revision-before" role="img"></canvas><canvas id="revision-after" role="img"></canvas></div><button id="close-compare" type="button">Close</button>
+  </dialog>
+  <dialog id="project-dialog" aria-labelledby="project-title" data-text-editor><h2 id="project-title">Import project</h2>
+    <p>Import a portable project as a new design. Existing design IDs are protected.</p><label for="project-file">Project JSON</label><input id="project-file" type="file" accept=".json,application/json">
+    <p id="project-import-status" role="status"></p><button id="confirm-project" type="button" disabled>Import project</button><button id="cancel-project" type="button">Cancel</button>
+  </dialog>
+  <dialog id="import-dialog" aria-labelledby="import-title" data-text-editor>
+    <h2 id="import-title">Import feedback</h2>
+    <p>Choose a JSON feedback file for this design. Review it before replacing current marks; replacement can be undone.</p>
+    <label for="import-file">Feedback JSON</label><input id="import-file" type="file" accept=".json,application/json">
+    <p id="import-preview" role="status"></p><p id="import-error" role="alert"></p>
+    <div class="note-actions"><button id="confirm-import" type="button" disabled>Replace feedback</button><button id="cancel-import" type="button">Cancel</button></div>
+  </dialog>
+  <dialog id="review-dialog" aria-labelledby="review-title" data-text-editor><h2 id="review-title">Visual design checks</h2><p>Bounds, overlaps, spacing, text overflow, and contrast in this viewport/state. Semantic accessibility checks require actual controls in Interact mode.</p><pre id="review-report"></pre><button id="close-review" type="button" autofocus>Close</button></dialog>
+  <dialog id="styleguide-dialog" aria-labelledby="styleguide-title" data-text-editor>
+    <div class="guide-heading"><h2 id="styleguide-title"></h2><button id="close-styleguide" type="button" autofocus>Close</button></div>
+    <p id="styleguide-summary"></p>
+    <p class="guide-hint">A reference for creating and reviewing designs. Designs can use the selected guide's tokens when painting.</p>
+    <section aria-labelledby="guide-palette-title"><h3 id="guide-palette-title">Palette · choose one accent</h3><div id="styleguide-palette" class="guide-palette"></div></section>
+    <dl id="styleguide-tokens"></dl>
+    <h3>Design principles</h3><ul id="styleguide-rules"></ul>
+    <h3>AI design prompt</h3><p id="styleguide-prompt"></p>
+    <div class="guide-actions"><button id="copy-styleguide-prompt" type="button">Copy prompt</button><button id="download-styleguide" type="button">Download full guide</button></div>
+    <p id="styleguide-action-status" role="status" aria-live="polite"></p>
+    <details><summary>Read full guide · original text</summary><pre id="styleguide-document" tabindex="0"></pre></details>
+  </dialog>
+  <dialog id="note-dialog" aria-labelledby="note-dialog-title" data-text-editor>
+    <form id="note-form">
+      <h2 id="note-dialog-title">Feedback note</h2>
+      <label for="note-text">What should change here?</label>
+      <textarea id="note-text" rows="5" maxlength="4000" required></textarea>
+      <p id="note-error" role="alert"></p>
+      <div class="note-actions">
+        <button id="note-save" type="submit">Save note</button>
+        <button id="note-cancel" type="button">Cancel</button>
+        <button id="note-delete" type="button" hidden>Delete note</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

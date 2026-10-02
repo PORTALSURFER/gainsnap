@@ -9,17 +9,55 @@ mod macos {
     use cocoa::foundation::{NSAutoreleasePool, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
     use gainsnap::gui_gpui::{new_screenshot_gui, WINDOW_HEIGHT, WINDOW_WIDTH};
     use image::{imageops::FilterType, ImageFormat, RgbaImage};
-    use objc::runtime::{Object, BOOL, NO, YES};
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
     use objc::{class, msg_send, sel, sel_impl};
     use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
     use std::ffi::{CStr, CString};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
     use std::thread;
     use std::time::Duration;
 
     const OUTPUT_WIDTH: u32 = WINDOW_WIDTH;
     const OUTPUT_HEIGHT: u32 = WINDOW_HEIGHT;
+    static HOST_SPACE_DOWN: AtomicUsize = AtomicUsize::new(0);
+    static HOST_SPACE_UP: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn host_key_down(_: &Object, _: Sel, event: id) {
+        unsafe {
+            let code: u16 = msg_send![event, keyCode];
+            if code == 49 {
+                HOST_SPACE_DOWN.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    extern "C" fn host_key_up(_: &Object, _: Sel, event: id) {
+        unsafe {
+            let code: u16 = msg_send![event, keyCode];
+            if code == 49 {
+                HOST_SPACE_UP.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn host_view_class() -> &'static Class {
+        static CLASS: OnceLock<&'static Class> = OnceLock::new();
+        CLASS.get_or_init(|| {
+            let mut class = ClassDecl::new("GainSnapTestHostView", class!(NSView)).unwrap();
+            unsafe {
+                class.add_method(
+                    sel!(keyDown:),
+                    host_key_down as extern "C" fn(&Object, Sel, id),
+                );
+                class.add_method(sel!(keyUp:), host_key_up as extern "C" fn(&Object, Sel, id));
+            }
+            class.register()
+        })
+    }
     struct NativeFixture {
         window: id,
         view: id,
@@ -176,7 +214,8 @@ mod macos {
                 NSBackingStoreType::NSBackingStoreBuffered,
                 false,
             );
-            let view = NSView::alloc(nil).initWithFrame_(frame);
+            let view: id = msg_send![host_view_class(), alloc];
+            let view = view.initWithFrame_(frame);
             window.setContentView_(view);
             // Match is disabled when the hosted editor becomes hidden. Keep
             // this fixture visible so the active-state captures exercise the
@@ -247,27 +286,22 @@ mod macos {
         }
     }
 
-    unsafe fn send_double_click(window: id, x: f64, top_y: f64) {
-        let window_number: isize = msg_send![window, windowNumber];
-        let location = NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - top_y);
-        for click_count in [1_isize, 2_isize] {
-            for event_type in [1_usize, 2_usize] {
-                let event: id = msg_send![class!(NSEvent),
-                    mouseEventWithType: event_type
-                    location: location
-                    modifierFlags: 0_u64 timestamp: 0.0_f64 windowNumber: window_number
-                    context: std::ptr::null_mut::<Object>() eventNumber: 1_isize
-                    clickCount: click_count pressure: 1.0_f64];
-                let _: () = msg_send![window, sendEvent: event];
-            }
-        }
-    }
-
     unsafe fn send_drag(window: id, x: f64, start_y: f64, end_y: f64) {
         send_drag_to(window, x, start_y, x, end_y);
     }
 
     unsafe fn send_drag_to(window: id, start_x: f64, start_y: f64, end_x: f64, end_y: f64) {
+        send_drag_to_with_modifiers(window, start_x, start_y, end_x, end_y, 0);
+    }
+
+    unsafe fn send_drag_to_with_modifiers(
+        window: id,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        modifiers: u64,
+    ) {
         let window_number: isize = msg_send![window, windowNumber];
         for (event_type, x, y) in [
             (1_usize, start_x, start_y),
@@ -277,7 +311,7 @@ mod macos {
             let event: id = msg_send![class!(NSEvent),
                 mouseEventWithType: event_type
                 location: NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - y)
-                modifierFlags: 0_u64 timestamp: 0.0_f64 windowNumber: window_number
+                modifierFlags: modifiers timestamp: 0.0_f64 windowNumber: window_number
                 context: std::ptr::null_mut::<Object>() eventNumber: 1_isize
                 clickCount: 1_isize pressure: 1.0_f64];
             let _: () = msg_send![window, sendEvent: event];
@@ -286,7 +320,7 @@ mod macos {
 
     unsafe fn select_target_with_mouse(window: id) {
         let window_number: isize = msg_send![window, windowNumber];
-        for (event_type, x) in [(1_usize, 67.0), (6_usize, 23.0), (2_usize, 23.0)] {
+        for (event_type, x) in [(1_usize, 81.0), (6_usize, 45.0), (2_usize, 45.0)] {
             let event: id = msg_send![class!(NSEvent),
                 mouseEventWithType: event_type
                 location: NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - 395.0)
@@ -407,6 +441,20 @@ mod macos {
             "meter should update without a click"
         );
 
+        // Exercise persistent, independently colored peak rules over live
+        // bars that have already fallen well below the recorded maxima.
+        status.update(0.0, -4.0, 0.0, 0.0, status.state());
+        status.update_rms(-8.0);
+        pump_appkit(app, &gui, 0.03);
+        status.update(0.0, -24.0, 0.0, 0.0, status.state());
+        status.update_rms(-30.0);
+        pump_appkit(app, &gui, 0.45);
+        let (w, h, pixels) = gui.capture_rgba().expect("peak hold capture");
+        write_capture(&output_root(), "peak-hold", w, h, pixels);
+        pump_appkit(app, &gui, 2.4);
+        let (w, h, pixels) = gui.capture_rgba().expect("peak hold release capture");
+        write_capture(&output_root(), "peak-hold-release", w, h, pixels);
+
         const COMMAND: u64 = 1_u64 << 20;
         const SHIFT: u64 = 1_u64 << 17;
         const FUNCTION: u64 = 1_u64 << 23;
@@ -421,13 +469,23 @@ mod macos {
 
         send_click(fixture.window, 45.0, 395.0);
         pump_appkit(app, &gui, 0.03);
+        let host_down = HOST_SPACE_DOWN.load(Ordering::Relaxed);
+        let host_up = HOST_SPACE_UP.load(Ordering::Relaxed);
+        let target_before_space = params.target_db();
+        send_key(app, fixture.window, &gui, " ", 49, 0);
+        assert_eq!(HOST_SPACE_DOWN.load(Ordering::Relaxed), host_down + 1);
+        assert_eq!(HOST_SPACE_UP.load(Ordering::Relaxed), host_up + 1);
+        assert_eq!(params.target_db(), target_before_space);
 
-        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
         send_key(app, fixture.window, &gui, "-", 27, 0);
         send_key(app, fixture.window, &gui, "1", 18, 0);
         send_key(app, fixture.window, &gui, "5", 23, 0);
         send_key(app, fixture.window, &gui, "\r", 36, 0);
-        assert_eq!(params.target_db(), -15.0, "native text entry should commit");
+        assert_eq!(
+            params.target_db(),
+            -15.0,
+            "one click should select the target for replacement"
+        );
 
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
@@ -525,7 +583,8 @@ mod macos {
         send_key(app, fixture.window, &gui, "c", 8, COMMAND);
         assert!(
             pasteboard_string().as_deref() == Some("-12.0"),
-            "mouse drag selects target digits"
+            "mouse drag selects target digits: {:?}",
+            pasteboard_string()
         );
 
         // Every VST3 Backspace representation edits the focused draft.
@@ -549,8 +608,10 @@ mod macos {
         }
         let (w, h, pixels) = gui.capture_rgba().expect("long numeric draft capture");
         assert_eq!((w, h), (before_w, before_h));
-        let right_controls_start = 138 * w / OUTPUT_WIDTH;
-        for y in 0..h {
+        let right_controls_start = 96 * w / OUTPUT_WIDTH;
+        let controls_row_start = 377 * h / OUTPUT_HEIGHT;
+        let controls_row_end = 401 * h / OUTPUT_HEIGHT;
+        for y in controls_row_start..controls_row_end {
             let start = ((y * w + right_controls_start) * 4) as usize;
             let end = (((y + 1) * w) * 4) as usize;
             assert_eq!(
@@ -660,10 +721,19 @@ mod macos {
             params.target_db() > -11.5 && params.target_db() < -7.0,
             "selected arrow still supports dragging"
         );
+        let target_before_shift_drag = params.target_db();
+        send_drag_to_with_modifiers(fixture.window, 50.0, 106.0, 50.0, 96.0, SHIFT);
+        pump_appkit(app, &gui, 0.03);
+        assert_ne!(params.target_db(), target_before_shift_drag);
+        assert_eq!(
+            params.target_db().fract(),
+            0.0,
+            "Shift-drag snaps target to 1 dB"
+        );
 
         // The knob and right marker both edit the same gain parameter.
         let target_before_manual = params.target_db();
-        send_click(fixture.window, 185.0, 350.0);
+        send_click(fixture.window, 153.0, 199.0);
         pump_appkit(app, &gui, 0.03);
         assert!(!params.match_requested());
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
@@ -671,14 +741,14 @@ mod macos {
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.9).abs() < 0.0001);
 
-        send_click(fixture.window, 91.0, 370.0);
+        send_click(fixture.window, 83.0, 138.0);
         pump_appkit(app, &gui, 0.03);
         send_key(app, fixture.window, &gui, "\u{f700}", 126, 0);
         assert!((params.manual_gain_db() - 1.0).abs() < 0.0001);
         send_key(app, fixture.window, &gui, "\u{f701}", 125, SHIFT);
         assert!((params.manual_gain_db() - 0.99).abs() < 0.0001);
         assert_eq!(params.target_db(), target_before_manual);
-        send_drag_to(fixture.window, 185.0, 322.0, 300.0, 302.0);
+        send_drag_to(fixture.window, 153.0, 199.0, 300.0, 179.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             (params.manual_gain_db() - 10.99).abs() < 0.01,
@@ -686,56 +756,122 @@ mod macos {
             params.manual_gain_db()
         );
         let gain_before_fine_drag = params.manual_gain_db();
-        send_drag(fixture.window, 91.0, 370.0, 360.0);
+        send_drag(fixture.window, 83.0, 150.0, 140.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.locked_gain_db() > gain_before_fine_drag + 3.0);
         assert!(params.locked_gain_db() < gain_before_fine_drag + 5.0);
+        let gain_before_shift_knob_drag = params.manual_gain_db();
+        send_drag_to_with_modifiers(fixture.window, 153.0, 199.0, 153.0, 189.0, SHIFT);
+        pump_appkit(app, &gui, 0.03);
+        assert_ne!(params.manual_gain_db(), gain_before_shift_knob_drag);
+        assert_eq!(
+            params.manual_gain_db().fract(),
+            0.0,
+            "Shift-drag snaps the knob to 1 dB"
+        );
+        let gain_before_shift_marker_drag = params.manual_gain_db();
+        send_drag_to_with_modifiers(fixture.window, 83.0, 150.0, 83.0, 140.0, SHIFT);
+        pump_appkit(app, &gui, 0.03);
+        assert_ne!(params.manual_gain_db(), gain_before_shift_marker_drag);
+        assert_eq!(
+            params.manual_gain_db().fract(),
+            0.0,
+            "Shift-drag snaps the right meter marker to 1 dB"
+        );
         assert_eq!(params.target_db(), target_before_manual);
 
-        send_double_click(fixture.window, 185.0, 398.0);
+        send_click(fixture.window, 153.0, 251.0);
         pump_appkit(app, &gui, 0.03);
         let (w, h, pixels) = gui.capture_rgba().expect("gain entry capture");
         write_capture(&output_root(), "gain-entry", w, h, pixels);
-        send_key(app, fixture.window, &gui, "a", 0, COMMAND);
         send_key(app, fixture.window, &gui, "-", 27, 0);
         send_key(app, fixture.window, &gui, "6", 22, 0);
         send_key(app, fixture.window, &gui, "\r", 36, 0);
-        assert_eq!(params.locked_gain_db(), -6.0, "dial text should set gain");
+        assert_eq!(
+            params.locked_gain_db(),
+            -6.0,
+            "one click should select the gain for replacement"
+        );
+        send_click(fixture.window, 153.0, 251.0);
+        pump_appkit(app, &gui, 0.03);
+        for (text, key_code) in [("1", 18), ("2", 19), ("0", 29)] {
+            send_key(app, fixture.window, &gui, text, key_code, 0);
+        }
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.locked_gain_db(), 120.0);
+        let (w, h, pixels) = gui.capture_rgba().expect("maximum gain field capture");
+        write_capture(&output_root(), "gain-entry-maximum", w, h, pixels);
+
+        send_click(fixture.window, 63.0, 389.0);
+        pump_appkit(app, &gui, 0.03);
+        for (text, key_code) in [("-", 27), ("3", 20), ("6", 22)] {
+            send_key(app, fixture.window, &gui, text, key_code, 0);
+        }
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.target_db(), -36.0);
+        let (w, h, pixels) = gui.capture_rgba().expect("minimum target field capture");
+        write_capture(&output_root(), "target-entry-minimum", w, h, pixels);
+        send_click(fixture.window, 63.0, 389.0);
+        for (text, key_code) in [("-", 27), ("1", 18), ("2", 19)] {
+            send_key(app, fixture.window, &gui, text, key_code, 0);
+        }
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert_eq!(params.target_db(), -12.0);
 
         // The output readouts select the matching mode without a separate
         // toggle button. Enter repeats the focused radio selection.
-        send_click(fixture.window, 143.0, 42.0);
+        send_click(fixture.window, 143.0, 50.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.rms_mode(), "RMS readout should select RMS matching");
+        send_key(app, fixture.window, &gui, " ", 49, 0);
+        assert!(params.rms_mode());
         send_key(app, fixture.window, &gui, "\r", 36, 0);
         assert!(
             params.rms_mode(),
             "Enter should preserve focused RMS selection"
         );
-        send_click(fixture.window, 143.0, 24.0);
+        send_click(fixture.window, 143.0, 30.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             !params.rms_mode(),
             "Peak readout should select Peak matching"
         );
 
-        // Exercise native focus plus GPUI's keyboard click path for both
-        // meter-row actions. A repeated Space keydown must toggle Match once.
-        send_click(fixture.window, 88.0, 395.0);
+        // Space reaches the host responder, including repeats, while Enter
+        // remains available for focused button activation.
+        send_click(fixture.window, 131.0, 386.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
             params.match_requested(),
             "native Match click should activate"
         );
+        let host_down = HOST_SPACE_DOWN.load(Ordering::Relaxed);
+        let host_up = HOST_SPACE_UP.load(Ordering::Relaxed);
         send_repeated_key(app, fixture.window, &gui, " ", 49, 0);
+        assert_eq!(HOST_SPACE_DOWN.load(Ordering::Relaxed), host_down + 2);
+        assert_eq!(HOST_SPACE_UP.load(Ordering::Relaxed), host_up + 1);
         assert!(
-            !params.match_requested(),
-            "repeated Space should toggle Match only once"
+            params.match_requested(),
+            "repeated Space must leave Match unchanged"
         );
         send_key(app, fixture.window, &gui, " ", 49, SHIFT);
         assert!(
-            !params.match_requested(),
+            params.match_requested(),
             "modified Space must not activate Match"
+        );
+        assert!(
+            !gui.on_key_down(' ' as u16, 7, 0),
+            "VST3 Space down must remain unhandled"
+        );
+        assert!(
+            !gui.on_key_up(' ' as u16, 7, 0),
+            "VST3 Space up must remain unhandled"
+        );
+        assert!(params.match_requested());
+        send_key(app, fixture.window, &gui, "\r", 36, 0);
+        assert!(
+            !params.match_requested(),
+            "Enter should toggle the focused Match button"
         );
         send_key(app, fixture.window, &gui, "\r", 36, 0);
         assert!(
@@ -744,8 +880,12 @@ mod macos {
         );
 
         let generation = params.restart_generation();
-        send_click(fixture.window, 114.0, 395.0);
+        send_click(fixture.window, 176.0, 370.0);
         pump_appkit(app, &gui, 0.03);
+        assert_eq!(params.restart_generation(), generation + 1);
+        let host_down = HOST_SPACE_DOWN.load(Ordering::Relaxed);
+        send_key(app, fixture.window, &gui, " ", 49, 0);
+        assert_eq!(HOST_SPACE_DOWN.load(Ordering::Relaxed), host_down + 1);
         assert_eq!(params.restart_generation(), generation + 1);
         send_key(app, fixture.window, &gui, "\r", 36, SHIFT);
         assert_eq!(params.restart_generation(), generation + 1);
@@ -754,7 +894,7 @@ mod macos {
         assert!(params.match_requested(), "rematch keeps Match enabled");
         pump_appkit(app, &gui, 0.12);
         eprintln!(
-            "PASS native GPUI GainSnap target editing, coarse and fine manual gain, clipboard, arrows, and focused-button Space/Enter activation"
+            "PASS native GPUI GainSnap numeric editing, dragging, clipboard, host Space forwarding, and focused-button Enter activation"
         );
         gui.close();
 

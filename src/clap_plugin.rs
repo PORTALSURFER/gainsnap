@@ -594,6 +594,21 @@ mod tests {
     }
 
     #[test]
+    fn clap_early_match_off_keeps_the_original_gain_at_the_sample_offset() {
+        let source = [parameter_event(2, 1.0), parameter_event(5, 0.0)];
+        let input = InputEvents::from_buffer(&source);
+        let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
+        collect_clap_timeline(&input, 8, &mut timeline, classify_clap_parameter);
+        let params = peak_params();
+        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        run_timeline(&mut timeline, &params, &mut engine, &[0.25; 8]);
+        assert!(!params.match_requested());
+        assert_eq!(params.locked_gain_db(), 0.0);
+        assert_eq!(engine.report().state, MatchState::Locked);
+        assert_eq!(engine.process_frame(&params, 0.5, -0.25), (0.5, -0.25));
+    }
+
+    #[test]
     fn clap_off_event_at_nonzero_offset_freezes_gain_before_louder_audio() {
         let source = [parameter_event(0, 1.0), parameter_event(512, 0.0)];
         let input = InputEvents::from_buffer(&source);
@@ -611,7 +626,7 @@ mod tests {
         let mut samples = [0.25_f32; 1024];
         samples[512..].fill(0.9);
         let params = peak_params();
-        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &samples);
 
         assert_eq!(engine.report().state, MatchState::Locked);
@@ -637,7 +652,7 @@ mod tests {
         let mut samples = [0.9_f32; 1024];
         samples[512..].fill(0.25);
         let params = peak_params();
-        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &samples);
 
         assert_eq!(engine.report().state, MatchState::Locked);
@@ -663,7 +678,7 @@ mod tests {
         );
 
         let params = peak_params();
-        let mut engine = GainSnapEngine::new(48_000.0, 0.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &[0.25; 1024]);
         apply_clap_overflow_final(&overflow_final, &params, &mut engine);
 

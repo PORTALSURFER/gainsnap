@@ -714,6 +714,13 @@ mod tests {
         apply_remaining_events(&mut runtime, &params);
 
         assert_eq!(runtime.engine.report().state, MatchState::Locked);
-        assert!((runtime.engine.report().locked_gain_db - 0.0412).abs() < 0.02);
+        // Match stopped before the listening window completed, so no
+        // provisional correction should be published at the block boundary.
+        assert_eq!(runtime.engine.report().locked_gain_db, 0.0);
+        assert_eq!(params.locked_gain_db(), 0.0);
+        assert_eq!(
+            runtime.engine.process_frame(&params, 0.25, -0.25),
+            (0.25, -0.25)
+        );
     }
 }

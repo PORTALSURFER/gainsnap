@@ -12,6 +12,9 @@ mod params;
 mod state;
 mod status;
 
+#[cfg(all(target_os = "macos", feature = "gpui-gui"))]
+mod host_space;
+
 #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
 pub mod gui_gpui;
 

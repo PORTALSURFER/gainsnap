@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "version": "0.1.4",
+  "source_head": "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7",
+  "base_tag": null,
+  "base_commit": null,
+  "entries": [
+    {
+      "category": "feature",
+      "description": "Add manual gain adjustment with a knob, fine meter handle, and direct numeric entry. Turning Match off keeps the chosen gain without background rematching.",
+      "commits": [
+        "66a809cb85ce46735819b83276ec3377711d709d",
+        "e87fdfdad4a7e09f766cb23c43851c6cc4023035"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Add saved, automatable Peak and RMS matching modes, with RMS selected for new instances.",
+      "commits": [
+        "f661316d643298ce015b205dceafbb1da3f48f3b",
+        "c439c2f46d014be8b36784d99871f61fb18b64e2"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Keep matching steady through beat gaps, quieter passages, and silence by retaining the strongest measurement in each Match session.",
+      "commits": [
+        "8a36f6f1020b6ead6fd539134e06fe8440079e35",
+        "5fc6494a22c5d70ff2da41f90b20c59311feb423",
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Limit RMS gain to available peak headroom and show \u201cBelow target\u201d when the requested level cannot be reached.",
+      "commits": [
+        "8a36f6f1020b6ead6fd539134e06fe8440079e35",
+        "c439c2f46d014be8b36784d99871f61fb18b64e2"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Smooth Match engagement, restarts, and target changes without an abrupt mute or initial gain jump.",
+      "commits": [
+        "7de6d6d90d63e51cd986023e8437699b7f706544",
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Show live output Peak and RMS meters with separate colors, numeric readouts, and two-second peak-hold markers.",
+      "commits": [
+        "37d76d9f95e498454c04dbd6302e87e1ed40d2c7",
+        "66a809cb85ce46735819b83276ec3377711d709d",
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Refresh the editor with a hardware-style layout, clickable Peak/RMS readouts, bottom Match and Restart controls, and a full-width activity rail.",
+      "commits": [
+        "08f7ab37b414acd1de6d493379ca6fed9b019021",
+        "c439c2f46d014be8b36784d99871f61fb18b64e2",
+        "3c8737246da0e2c8c5aea238e4a8f4c1b1ac8583",
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Keep knob, meter-handle, and numeric-field drags active outside the editor until the mouse button is released.",
+      "commits": [
+        "c6e8aeae6808c06284041003a61348d15af6a9c0",
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Selecting the target handle no longer changes its value; drag it or use arrow keys to adjust it.",
+      "commits": [
+        "b9b4076fa8adb26abf8c4e3e5107bf80110b3681",
+        "06ad60d2d7789fe30aba48386d13d2ab72afb9c9"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Restore macOS numeric target entry and arrow-key adjustments, including finer steps with Shift.",
+      "commits": [
+        "41d31cf6ca3f0926b7932f833ffe7ad0fc8f9eb1",
+        "f4aff2d313c47b76e2e34645654a23d9ce9b2523"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Keep Space available for the DAW transport even when a plug-in button or numeric field has focus.",
+      "commits": [
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Stop Match when the editor is closed, hidden, or minimized while preserving the gain setting.",
+      "commits": [
+        "b6417d96190ffbe3cd11afa7ef94d0663ca18f4d"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Light Match in orange with a soft pulse while listening or adjusting.",
+      "commits": [
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Adjust gain and target by dragging their numeric fields vertically, with finer steps when holding Shift.",
+      "commits": [
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Let the gain triangle reach the bottom of the meter at its minimum gain.",
+      "commits": [
+        "9bff0ca098ce5d3b3319fcf0440791c51f86b4b7"
+      ]
+    }
+  ]
+}

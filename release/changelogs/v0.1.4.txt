@@ -1,0 +1,22 @@
+GainSnap v0.1.4
+
+Features
+- Add manual gain adjustment with a knob, fine meter handle, and direct numeric entry. Turning Match off keeps the chosen gain without background rematching.
+- Add saved, automatable Peak and RMS matching modes, with RMS selected for new instances.
+- Show live output Peak and RMS meters with separate colors, numeric readouts, and two-second peak-hold markers.
+- Adjust gain and target by dragging their numeric fields vertically, with finer steps when holding Shift.
+
+Improvements
+- Keep matching steady through beat gaps, quieter passages, and silence by retaining the strongest measurement in each Match session.
+- Limit RMS gain to available peak headroom and show “Below target” when the requested level cannot be reached.
+- Refresh the editor with a hardware-style layout, clickable Peak/RMS readouts, bottom Match and Restart controls, and a full-width activity rail.
+- Light Match in orange with a soft pulse while listening or adjusting.
+
+Bug fixes
+- Smooth Match engagement, restarts, and target changes without an abrupt mute or initial gain jump.
+- Keep knob, meter-handle, and numeric-field drags active outside the editor until the mouse button is released.
+- Selecting the target handle no longer changes its value; drag it or use arrow keys to adjust it.
+- Restore macOS numeric target entry and arrow-key adjustments, including finer steps with Shift.
+- Keep Space available for the DAW transport even when a plug-in button or numeric field has focus.
+- Stop Match when the editor is closed, hidden, or minimized while preserving the gain setting.
+- Let the gain triangle reach the bottom of the meter at its minimum gain.

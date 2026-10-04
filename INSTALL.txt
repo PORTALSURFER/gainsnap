@@ -1,0 +1,18 @@
+GainSnap — macOS Apple Silicon VST3
+
+1. Quit your DAW.
+2. Copy GainSnap.vst3 into:
+   ~/Library/Audio/Plug-Ins/VST3/
+   In Finder, choose Go > Go to Folder and paste that path.
+   Create the VST3 folder if it does not exist.
+3. Remove older GainSnap VST3 copies from your plug-in folders to avoid duplicates.
+4. Open your DAW and rescan VST3 plug-ins, then load GainSnap on an audio track.
+
+Choose Peak or RMS and set the target. Turn on Match to listen and adjust,
+then turn it off to hold the correction. Restart begins a new measurement.
+Drag either triangle or the gain knob to adjust it. Drag the numeric fields
+vertically, or click and type a value. Shift gives finer numeric-field steps.
+Space passes through to the host transport.
+
+This package contains the Apple Silicon macOS build only.
+GainSnap is free with optional donations; no license activation is needed.

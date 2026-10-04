@@ -253,7 +253,7 @@ mod tests {
             bottom: 0,
         };
         assert_eq!(unsafe { view.getSize(&mut rect) }, kResultOk);
-        assert_eq!((rect.right, rect.bottom), (250, 424));
+        assert_eq!((rect.right, rect.bottom), (200, 424));
     }
 
     #[test]
@@ -342,17 +342,17 @@ mod tests {
             shared.params.match_requested(),
             "native click must activate Match"
         );
-        assert_eq!(unsafe { view.onKeyDown(' ' as char16, 7, 0) }, kResultOk);
-        let _ = unsafe { view.onKeyUp(' ' as char16, 7, 0) };
+        assert_ne!(unsafe { view.onKeyDown(' ' as char16, 7, 0) }, kResultOk);
+        assert_ne!(unsafe { view.onKeyUp(' ' as char16, 7, 0) }, kResultOk);
         assert!(
-            !shared.params.match_requested(),
-            "host keyboard callback must toggle once"
+            shared.params.match_requested(),
+            "Space callback must leave Match unchanged for host transport"
         );
         unsafe {
             SendMessageW(child, WM_CHAR, Some(WPARAM(32)), Some(LPARAM(0)));
         }
         assert!(
-            !shared.params.match_requested(),
+            shared.params.match_requested(),
             "a text commit must not activate the focused Match button"
         );
 

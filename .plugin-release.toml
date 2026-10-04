@@ -1,0 +1,37 @@
+schema = 1
+name = "GainSnap"
+package = "gainsnap"
+library = "gainsnap"
+
+[[variants]]
+name = "GainSnap"
+slug = "gainsnap"
+archive_slug = "GainSnap"
+bundle_id = "com.portalsurfer.gainsnap.vst3"
+features = ["vst3"]
+gumroad_product = "psJ7D4FKlpfndeGkQkcR6g=="
+thumbnail_style = "donation"
+thumbnail_label = "GAINSNAP"
+
+[variants.instructions]
+"macos-arm64" = "INSTALL.txt"
+
+[signing]
+team_id = "DKTKQ8U5T8"
+identity = "Developer ID Application: Wanja Svasek (DKTKQ8U5T8)"
+profile = "capture-release"
+
+[hooks]
+checks = [
+  { argv = ["bash", "scripts/ci.sh", "--vst3"], platforms = ["macos-arm64"] },
+]
+
+[release]
+expected_platforms = ["macos-arm64"]
+
+[changelog]
+enabled = true
+max_evidence_bytes = 1048576
+
+[announcements]
+enabled = false

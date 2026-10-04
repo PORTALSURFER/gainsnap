@@ -89,6 +89,8 @@ pub struct GuiStatus {
     input_peak_db: AtomicU32,
     output_peak_db: AtomicU32,
     output_rms_db: AtomicU32,
+    pending_peak_max: AtomicU32,
+    pending_rms_max: AtomicU32,
     locked_gain_db: AtomicU32,
     progress: AtomicU32,
     state: AtomicU32,
@@ -108,6 +110,8 @@ impl GuiStatus {
             input_peak_db: AtomicU32::new((-120.0_f32).to_bits()),
             output_peak_db: AtomicU32::new((-120.0_f32).to_bits()),
             output_rms_db: AtomicU32::new((-120.0_f32).to_bits()),
+            pending_peak_max: AtomicU32::new(0),
+            pending_rms_max: AtomicU32::new(0),
             locked_gain_db: AtomicU32::new(0.0_f32.to_bits()),
             progress: AtomicU32::new(0.0_f32.to_bits()),
             state: AtomicU32::new(MatchState::Ready as u32),
@@ -149,6 +153,7 @@ impl GuiStatus {
             .store(sanitize_db(input_peak_db).to_bits(), Ordering::Relaxed);
         self.output_peak_db
             .store(sanitize_db(output_peak_db).to_bits(), Ordering::Relaxed);
+        publish_meter_maximum(&self.pending_peak_max, output_peak_db);
         self.locked_gain_db.store(
             sanitize_gain_db(locked_gain_db).to_bits(),
             Ordering::Relaxed,
@@ -163,6 +168,31 @@ impl GuiStatus {
     pub fn update_rms(&self, db: f32) {
         self.output_rms_db
             .store(sanitize_db(db).to_bits(), Ordering::Relaxed);
+        publish_meter_maximum(&self.pending_rms_max, db);
+    }
+
+    /// Tell the editor a finite non-silent meter publication is awaiting a poll.
+    #[cfg(any(
+        test,
+        all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui")
+    ))]
+    pub(crate) fn has_pending_meter_maxima(&self) -> bool {
+        self.pending_peak_max.load(Ordering::Relaxed) != 0
+            || self.pending_rms_max.load(Ordering::Relaxed) != 0
+    }
+
+    /// Drain the strongest output readings published since the previous UI poll.
+    /// A concurrent audio publication belongs to this poll or the next one;
+    /// the atomic swap never discards a publication in between read and clear.
+    #[cfg(any(
+        test,
+        all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui")
+    ))]
+    pub(crate) fn take_meter_maxima(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.pending_peak_max.swap(0, Ordering::Relaxed)) - 120.0,
+            f32::from_bits(self.pending_rms_max.swap(0, Ordering::Relaxed)) - 120.0,
+        )
     }
 
     /// Read the most recent input peak in decibels.
@@ -229,5 +259,62 @@ fn sanitize_gain_db(value: f32) -> f32 {
         value.clamp(GAIN_MIN_DB, GAIN_MAX_DB)
     } else {
         0.0
+    }
+}
+
+// Offset finite dB values into the nonnegative domain, where IEEE float bits
+// have the same ordering as their magnitudes. Atomic max keeps every block's
+// high-water mark without allocation or locking on the audio thread.
+fn publish_meter_maximum(pending: &AtomicU32, db: f32) {
+    pending.fetch_max((sanitize_db(db) + 120.0).to_bits(), Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn publish_peak(status: &GuiStatus, db: f32) {
+        status.update_with_activity(
+            -120.0,
+            db,
+            0.0,
+            0.0,
+            MatchState::Ready,
+            MatchActivity::Ready,
+        );
+    }
+
+    #[test]
+    fn meter_maxima_keep_brief_hits_between_ui_polls_and_drain_independently() {
+        let status = GuiStatus::new();
+        assert!(!status.has_pending_meter_maxima());
+        publish_peak(&status, -18.0);
+        status.update_rms(-30.0);
+        assert!(status.has_pending_meter_maxima());
+        assert!(
+            status.has_pending_meter_maxima(),
+            "peek must not drain a transient"
+        );
+        publish_peak(&status, -3.0);
+        status.update_rms(-12.0);
+        publish_peak(&status, -90.0);
+        status.update_rms(-80.0);
+        assert_eq!(status.take_meter_maxima(), (-3.0, -12.0));
+        assert!(!status.has_pending_meter_maxima());
+        assert_eq!(status.take_meter_maxima(), (-120.0, -120.0));
+        publish_peak(&status, -6.0);
+        assert_eq!(status.take_meter_maxima(), (-6.0, -120.0));
+    }
+
+    #[test]
+    fn meter_maxima_handle_positive_db_and_nonfinite_values() {
+        let status = GuiStatus::new();
+        publish_peak(&status, f32::NAN);
+        status.update_rms(f32::INFINITY);
+        assert_eq!(status.take_meter_maxima(), (-120.0, -120.0));
+        publish_peak(&status, 6.0);
+        publish_peak(&status, -1.0);
+        status.update_rms(100.0);
+        assert_eq!(status.take_meter_maxima(), (6.0, 24.0));
     }
 }

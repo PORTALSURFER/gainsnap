@@ -21,41 +21,35 @@ shows the latest 300 ms sliding RMS window. The scale uses a full-scale square
 wave as 0 dBFS RMS; a full-scale sine reads about -3.01 dBFS RMS. The mode is
 saved with the project and can be automated in CLAP and VST3.
 
-RMS matching observes the first 300 ms using conservative peak correction,
-then follows the strongest complete window in roughly the most recent three
-seconds. RMS evidence ages out, allowing Match to settle toward a sustained
-upstream level change while the stability check helps avoid chasing decaying
-tails and short gaps.
-A lower rolling estimate is published only after recent usable evidence remains
-within 0.5 dB for about 300 ms; newly louder evidence updates promptly. Silence
-after an observed hit still completes that hit's window, and after two seconds of
-silence, returning audio gets a fresh protected startup. RMS permits peaks above
-its average target, but requested gain is bounded by the headroom of the largest
-recent sample peak; the existing 0 dBFS sample-peak guard remains active as a
-safety net.
-Peak mode keeps its session maximum until Match is turned off or Restart is
-pressed. A newly louder upstream peak automatically lowers the matched gain;
-use Restart to discard the old maximum when upstream audio becomes quieter.
-RMS mode retains its rolling adaptation behavior and may take
-roughly 3–4 seconds of steady material to respond.
+Both modes retain their strongest evidence for the entire Match session. Peak
+keeps the highest stereo-linked sample peak; RMS keeps the strongest complete
+300 ms mean-square window, plus the highest sample peak for headroom protection.
+Quiet passages and silence never erase that evidence or raise the correction.
+After the gain settles, the activity rail remains confident until newly stronger
+evidence requires another adjustment. Leave Match on until the loudest part has
+played. Press Restart, or turn Match off and on, to start a fresh measurement.
+Changing the target reuses the retained evidence; changing mode starts a new session.
+RMS permits peaks above its average target, while the fixed 0 dBFS sample-peak
+guard remains active.
 Peak targets that would require more than −36 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
 matching retains its +24 dB boost cap and peak-headroom protection. The meter
 always shows the actual protected output. To normalize to 0 dBFS, select Peak,
 enter 0 as the target, and start Match.
 
-Engaging Match while audio is playing first fades the audible gain down over
-10 ms, then fades the matched output up over 300 ms. This avoids the waveform
-jump caused by an immediate mute. Starting from silence waits for usable audio
-before fading up. Rapid restarts and target changes begin from the gain actually
-being heard. Gain boosts use a 100 ms response and reductions use 10 ms, with
-higher-precision smoothing at high sample rates.
+Engaging Match holds the currently audible gain while listening for 300 ms
+from the first usable signal. It then blends smoothly into the measured gain
+for 300 ms, without dipping through silence or applying an initial provisional
+boost. RMS waits for a complete measurement window. Further stronger evidence
+fine-tunes the correction with 100 ms gain increases and 10 ms reductions.
+Restarts and target changes begin from the gain actually being heard. Turning
+Match off before the first measurement keeps the original gain.
 
-A stereo-linked sample-peak guard reacts immediately to bursts and recovers over
-100 ms. The short outgoing transition retains its previous ceiling while fading
-down; the Peak-mode path remains capped at the selected target while Match is
-active. Turning Match off early lets the transition finish.
-Protection adds no latency, and the meter includes its attenuation.
+The stereo-linked sample-peak guard remains active while listening and adjusting.
+It reacts immediately to bursts and recovers over 100 ms. Peak-mode protection
+moves smoothly to the selected target during the initial gain transition and
+caps subsequent peaks at that target. Protection adds no latency, and the meter
+includes its attenuation.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
@@ -66,14 +60,28 @@ readouts beside it. The left arrow and horizontal line set the target. Select
 Peak or RMS to choose which level Match uses. Drag the thick inner ring of the
 round gain control for coarse adjustments, even beyond the editor, or drag the
 right meter arrow for fine adjustments. The arrow sits at −12 dB when Gain is
-0 dB and stays independent of the moving meter bars. Double-click the value
-beneath the knob to type a gain in dB. Arrow keys adjust a focused control;
-Shift makes smaller steps. Editing
-either gain control stops Match. The sample-peak guard still prevents output
+0 dB and stays independent of the moving meter bars. Click the value
+beneath the knob or meter once to select the entire number and type a replacement.
+Arrow keys adjust a focused control; Shift makes smaller keyboard steps. Hold
+Shift while dragging either meter arrow or the knob to snap its value to whole
+dB steps.
+Drag either numeric field vertically to adjust its value; hold Shift for finer steps.
+Both meter triangles and numeric field drags continue outside the editor until
+the mouse button is released. The gain triangle spans the full meter travel,
+with its −36 dB minimum at the bottom and unity at the −12 dB scale position.
+Match lights orange and pulses softly while listening or adjusting.
+Space passes through to the host's transport, including when a button or numeric
+field is focused. Enter activates the focused button.
+Editing either gain control stops Match. The sample-peak guard still prevents output
 above 0 dBFS. The default editor is
-250 × 424 logical pixels. The three-stage activity rail spans the full width at
-the bottom, while its status text sits below the output readouts during Match.
-The status text disappears when Match is off.
+200 × 424 logical pixels. The approved Sift Hardware r5 design uses a graphite/sage enclosure,
+a tall left output meter with coral Peak and purple RMS bars, a smaller lower-right
+gain knob, compact numeric fields, and footer Match and icon-only Restart controls.
+Edge-connected metal inserts and muted gradients give the surfaces shallow depth. Peak and RMS meters keep separate colored peak rules for two
+seconds, then release at 1.5 dB per second without dropping below the live bar.
+The three-stage activity rail spans the bottom, while its status text sits
+below the output readouts during Match.
+Manual and held states omit redundant status text; no-signal feedback remains visible.
 Matched means the correction has settled. Below target means the
 requested RMS needs more gain than peak headroom or the gain range allows; GainSnap
 does not compress or limit the transients to reach it. RMS matching uses the strongest measured 300 ms window; the

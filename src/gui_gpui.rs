@@ -395,45 +395,55 @@ enum InfoPanel {
 #[derive(Clone, Copy)]
 struct TargetPreset {
     label: &'static str,
-    target_db: f32,
-    rms: bool,
+    peak_db: f32,
+    rms_db: f32,
+}
+
+impl TargetPreset {
+    fn target_db(self, rms: bool) -> f32 {
+        if rms {
+            self.rms_db
+        } else {
+            self.peak_db
+        }
+    }
 }
 
 const TECHNO_PRESETS: [TargetPreset; 7] = [
     TargetPreset {
-        label: "Kick · −12",
-        target_db: -12.0,
-        rms: false,
+        label: "Kick",
+        peak_db: -12.0,
+        rms_db: -24.0,
     },
     TargetPreset {
-        label: "Sub · −14",
-        target_db: -14.0,
-        rms: false,
+        label: "Sub",
+        peak_db: -14.0,
+        rms_db: -18.0,
     },
     TargetPreset {
-        label: "Tom / Mid-bass · −16",
-        target_db: -16.0,
-        rms: false,
+        label: "Tom / Mid-bass",
+        peak_db: -16.0,
+        rms_db: -22.0,
     },
     TargetPreset {
-        label: "Percs · −18",
-        target_db: -18.0,
-        rms: false,
+        label: "Percs",
+        peak_db: -18.0,
+        rms_db: -26.0,
     },
     TargetPreset {
-        label: "Textures / Synths · −20",
-        target_db: -20.0,
-        rms: false,
+        label: "Textures / Synths",
+        peak_db: -20.0,
+        rms_db: -24.0,
     },
     TargetPreset {
-        label: "Effects · −22",
-        target_db: -22.0,
-        rms: false,
+        label: "Effects",
+        peak_db: -22.0,
+        rms_db: -28.0,
     },
     TargetPreset {
-        label: "Normalize · 0",
-        target_db: 0.0,
-        rms: false,
+        label: "Normalize",
+        peak_db: -12.0,
+        rms_db: -24.0,
     },
 ];
 
@@ -1233,8 +1243,8 @@ impl GainSnapEditor {
     }
 
     fn apply_preset(&mut self, preset: TargetPreset, window: &mut Window, cx: &mut Context<Self>) {
-        self.controller.toggle_value(PARAM_RMS_MODE, preset.rms);
-        self.controller.set_target_db(preset.target_db);
+        self.controller
+            .set_target_db(preset.target_db(self.controller.params.rms_mode()));
         self.target_input
             .update(cx, |input, cx| input.set_editing(false, cx));
         self.set_target_text_force(self.controller.target_text(), cx);
@@ -1256,18 +1266,27 @@ impl GainSnapEditor {
             .flex_col()
             .gap(px(10.0));
         if panel == InfoPanel::Presets {
+            let rms = self.controller.params.rms_mode();
             body = body.gap(px(6.0)).child(
                 div()
                     .text_size(px(10.0))
                     .line_height(px(14.0))
                     .text_color(solid(TEXT_MUTED))
-                    .child("Techno starting points. Peak targets in dBFS."),
+                    .child(if rms {
+                        "RMS targets in dBFS. +12 dB on the main bus."
+                    } else {
+                        "Peak targets in dBFS. +12 dB on the main bus."
+                    }),
             );
             for (index, preset) in TECHNO_PRESETS.iter().copied().enumerate() {
                 body = body.child(
                     utility_button(
                         ("preset-row", index),
-                        preset.label,
+                        format!(
+                            "{} · {}",
+                            preset.label,
+                            format_meter_readout(preset.target_db(rms))
+                        ),
                         &self.preset_row_focus[index],
                         window,
                         cx.listener(move |view, _, window, cx| {
@@ -1461,12 +1480,13 @@ impl GainSnapEditor {
 
 fn utility_button(
     id: impl Into<gpui::ElementId>,
-    text: &'static str,
+    text: impl Into<gpui::SharedString>,
     focus: &FocusHandle,
     window: &Window,
     listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let on_down = focus.clone();
+    let text = text.into();
     div()
         .id(id)
         .flex()
@@ -1487,10 +1507,10 @@ fn utility_button(
         .line_height(px(13.0))
         .text_color(solid(TEXT_PRIMARY))
         .role(gpui::Role::Button)
-        .aria_label(if text == "?" {
-            "Help and shortcuts"
+        .aria_label(if text.as_ref() == "?" {
+            gpui::SharedString::from("Help and shortcuts")
         } else {
-            text
+            text.clone()
         })
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             window.focus(&on_down, cx)
@@ -2008,7 +2028,6 @@ impl Render for GainSnapEditor {
             .w(px(TARGET_CONTROL_WIDTH))
             .h(px(TARGET_METER_HEIGHT))
             .track_focus(&self.meter_focus_handle)
-            .tooltip(|_, cx| cx.new(|_| ControlHint("Left: target dBFS. Right: gain dB, independent of the output scale. Gain spans −36 to +120; unity sits at −12 on the meter. Double-click resets.")).into())
             .on_mouse_down(MouseButton::Left, cx.listener(Self::meter_mouse_down))
             .child(
                 canvas(

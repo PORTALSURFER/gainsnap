@@ -974,27 +974,32 @@ mod macos {
         assert_eq!(params.restart_generation(), generation + 2);
         assert!(params.match_requested(), "rematch keeps Match enabled");
         pump_appkit(app, &gui, 0.12);
-        // New controls remain live through panels; presets edit mode/target
-        // without implicitly starting/stopping Match.
-        send_click(fixture.window, 144.0, 258.0);
-        pump_appkit(app, &gui, 0.04);
-        let (w, h, pixels) = gui.capture_rgba().expect("preset panel");
-        write_capture(&output_root(), "presets", w, h, pixels);
+        // Presets preserve mode and Match, with targets suited to +12 dB on the main bus.
         let match_before_preset = params.match_requested();
-        // Check every row, including the last one, in the compact panel.
-        for (index, target) in [-12.0, -14.0, -16.0, -18.0, -20.0, -22.0, 0.0]
-            .into_iter()
-            .enumerate()
-        {
-            if index > 0 {
+        for (rms, targets) in [
+            (false, [-12.0, -14.0, -16.0, -18.0, -20.0, -22.0, -12.0]),
+            (true, [-24.0, -18.0, -22.0, -26.0, -24.0, -28.0, -24.0]),
+        ] {
+            params.set_param(toybox::clack_plugin::utils::ClapId::new(4), f32::from(rms));
+            for (index, target) in targets.into_iter().enumerate() {
                 send_click(fixture.window, 144.0, 258.0);
                 pump_appkit(app, &gui, 0.04);
+                if index == 0 {
+                    let (w, h, pixels) = gui.capture_rgba().expect("preset panel");
+                    write_capture(
+                        &output_root(),
+                        if rms { "presets-rms" } else { "presets" },
+                        w,
+                        h,
+                        pixels,
+                    );
+                }
+                send_click(fixture.window, 85.0, 103.0 + index as f64 * 36.0);
+                pump_appkit(app, &gui, 0.04);
+                assert_eq!(params.rms_mode(), rms, "preset {index} preserves mode");
+                assert_eq!(params.target_db(), target, "preset {index} target");
+                assert_eq!(params.match_requested(), match_before_preset);
             }
-            send_click(fixture.window, 85.0, 103.0 + index as f64 * 36.0);
-            pump_appkit(app, &gui, 0.04);
-            assert!(!params.rms_mode(), "preset {index} uses Peak");
-            assert_eq!(params.target_db(), target, "preset {index} target");
-            assert_eq!(params.match_requested(), match_before_preset);
         }
 
         send_click(fixture.window, 179.0, 53.0);

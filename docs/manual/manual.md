@@ -59,19 +59,24 @@ limits can prevent matching the selected target exactly.
 
 # Techno presets
 
-These are starting points for arranging levels, not mastering specifications.
-All presets select Peak mode and set a target; selecting one preserves whether
-Match is already on or off.
+These starting points assume a Utility adding +12 dB on the main bus. Peak
+presets target −12 dBFS or lower before that boost. Presets follow the selected
+Peak/RMS mode and preserve whether Match is on or off.
 
-| Preset | Peak target |
-| --- | ---: |
-| Kick | −12 dBFS |
-| Sub | −14 dBFS |
-| Tom / Mid-bass | −16 dBFS |
-| Percs | −18 dBFS |
-| Textures / Synths | −20 dBFS |
-| Effects | −22 dBFS |
-| Normalize | 0 dBFS |
+| Preset | Peak target | RMS target |
+| --- | ---: | ---: |
+| Kick | −12 dBFS | −24 dBFS |
+| Sub | −14 dBFS | −18 dBFS |
+| Tom / Mid-bass | −16 dBFS | −22 dBFS |
+| Percs | −18 dBFS | −26 dBFS |
+| Textures / Synths | −20 dBFS | −24 dBFS |
+| Effects | −22 dBFS | −28 dBFS |
+| Normalize | −12 dBFS | −24 dBFS |
+
+RMS presets sit lower to leave room for transients. They match average level
+and do not impose a peak ceiling. Choose Peak when you want to match the
+highest observed sample. These are individual-track starting points; summing
+tracks can produce a higher main-bus level.
 
 # Controls and feedback
 

@@ -5,8 +5,10 @@
 - Pass signals above 0 dBFS without sample-peak limiting, preserving transients
   and avoiding abrupt limiter attenuation. RMS matching no longer caps gain by
   sample-peak headroom; its +24 dB boost limit remains.
-- Add techno Peak presets: Kick −12, Sub −14, Tom / Mid-bass −16, Percs −18,
-  Textures / Synths −20, Effects −22 dBFS, and Normalize at 0 dBFS.
+- Add mode-aware techno presets for a +12 dB main-bus boost. Peak presets
+  target −12 dBFS or lower; RMS presets use lower average targets. Normalize
+  targets −12 dBFS Peak or −24 dBFS RMS.
+- Remove the meter-triangle hover tooltip so it no longer obscures the view.
 - Show actual applied gain, adjustment direction, and retained RMS shortfall.
 - Add double-click gain/target resets, clearer labels and keyboard focus,
   and compact Help and Presets panels.

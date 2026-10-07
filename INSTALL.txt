@@ -18,7 +18,7 @@ This package contains the Apple Silicon macOS build only.
 GainSnap is free with optional donations; no license activation is needed.
 
 Open GainSnap Manual.pdf or GainSnap Manual.html for the full offline guide.
-CHANGELOG.md lists changes in this release.
+CHANGELOG.txt lists changes in this release.
 
 GainSnap passes audio above 0 dBFS without a sample-peak limiter.
 Keep appropriate headroom in downstream effects and at your final output.

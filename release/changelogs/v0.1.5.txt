@@ -1,0 +1,12 @@
+GainSnap v0.1.5
+
+Features
+- Add Peak presets for Kick, Sub, Tom / Mid-bass, Percs, Textures / Synths, Effects, and Normalize.
+- Show actual applied gain, adjustment direction, and how far RMS matching falls short when gain is limited.
+- Double-click gain controls to reset to 0 dB and stop Match, or target controls to reset to −12 dBFS.
+- Add offline PDF and HTML user manuals.
+
+Improvements
+- Pass audio above 0 dBFS without limiting transients. RMS matching no longer restricts gain by peak headroom; its +24 dB boost limit remains.
+- Add compact Help, control tooltips, clearer gain labels, and more visible keyboard focus.
+- Make floating Peak and RMS meter stripes brighter and thicker for easier reading.

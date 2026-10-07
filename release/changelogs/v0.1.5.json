@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "version": "0.1.5",
+  "source_head": "0a7e4ac17daf9d931f62644d70c60e2a834fcb93",
+  "base_tag": "v0.1.4",
+  "base_commit": "22741169f399c404d89f8f022e5f3f160742a546",
+  "entries": [
+    {
+      "category": "improvement",
+      "description": "Pass audio above 0 dBFS without limiting transients. RMS matching no longer restricts gain by peak headroom; its +24 dB boost limit remains.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Add Peak presets for Kick, Sub, Tom / Mid-bass, Percs, Textures / Synths, Effects, and Normalize.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Show actual applied gain, adjustment direction, and how far RMS matching falls short when gain is limited.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Double-click gain controls to reset to 0 dB and stop Match, or target controls to reset to −12 dBFS.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Add compact Help, control tooltips, clearer gain labels, and more visible keyboard focus.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Make floating Peak and RMS meter stripes brighter and thicker for easier reading.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Add offline PDF and HTML user manuals.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    }
+  ]
+}

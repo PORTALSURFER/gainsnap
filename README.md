@@ -23,18 +23,17 @@ saved with the project and can be automated in CLAP and VST3.
 
 Both modes retain their strongest evidence for the entire Match session. Peak
 keeps the highest stereo-linked sample peak; RMS keeps the strongest complete
-300 ms mean-square window, plus the highest sample peak for headroom protection.
+300 ms mean-square window.
 Quiet passages and silence never erase that evidence or raise the correction.
 After the gain settles, the activity rail remains confident until newly stronger
 evidence requires another adjustment. Leave Match on until the loudest part has
 played. Press Restart, or turn Match off and on, to start a fresh measurement.
 Changing the target reuses the retained evidence; changing mode starts a new session.
-RMS permits peaks above its average target, while the fixed 0 dBFS sample-peak
-guard remains active.
+RMS permits peaks above its average target and above 0 dBFS.
 Peak targets that would require more than −36 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
-matching retains its +24 dB boost cap and peak-headroom protection. The meter
-always shows the actual protected output. To normalize to 0 dBFS, select Peak,
+matching retains its +24 dB boost cap. The meter
+always shows the actual output. To normalize to 0 dBFS, select Peak,
 enter 0 as the target, and start Match.
 
 Engaging Match holds the currently audible gain while listening for 300 ms
@@ -45,11 +44,12 @@ fine-tunes the correction with 100 ms gain increases and 10 ms reductions.
 Restarts and target changes begin from the gain actually being heard. Turning
 Match off before the first measurement keeps the original gain.
 
-The stereo-linked sample-peak guard remains active while listening and adjusting.
-It reacts immediately to bursts and recovers over 100 ms. Peak-mode protection
-moves smoothly to the selected target during the initial gain transition and
-caps subsequent peaks at that target. Protection adds no latency, and the meter
-includes its attenuation.
+GainSnap applies smooth, linear gain without a sample-peak limiter or clipping
+at 0 dBFS. Louder transients can exceed the target while matching adapts;
+manual and held gain also pass signals above full scale to the host. Only
+non-finite inputs and numeric overflow at the floating-point range boundary
+are contained. Output clipping is the responsibility of downstream processing
+or the final hardware/export stage.
 
 When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
@@ -72,8 +72,7 @@ with its −36 dB minimum at the bottom and unity at the −12 dB scale position
 Match lights orange and pulses softly while listening or adjusting.
 Space passes through to the host's transport, including when a button or numeric
 field is focused. Enter activates the focused button.
-Editing either gain control stops Match. The sample-peak guard still prevents output
-above 0 dBFS. The default editor is
+Editing either gain control stops Match. The default editor is
 200 × 424 logical pixels. The approved Sift Hardware r5 design uses a graphite/sage enclosure,
 a tall left output meter with coral Peak and purple RMS bars, a smaller lower-right
 gain knob, compact numeric fields, and footer Match and icon-only Restart controls.
@@ -83,15 +82,14 @@ The three-stage activity rail spans the bottom, while its status text sits
 below the output readouts during Match.
 Manual and held states omit redundant status text; no-signal feedback remains visible.
 Matched means the correction has settled. Below target means the
-requested RMS needs more gain than peak headroom or the gain range allows; GainSnap
+requested RMS needs more gain than the gain range allows; GainSnap
 does not compress or limit the transients to reach it. RMS matching uses the strongest measured 300 ms window; the
-live RMS readout may fall between hits. After a correction or peak-guard event, the telemetry
+live RMS readout may fall between hits. After a correction, the telemetry
 keeps Adjusting visible for about 200 ms so short gain changes remain legible
 at normal editor refresh rates. Native macOS and Windows editors share this
 surface, including host keyboard input, focus, and DPI-aware resizing.
-Quieter passages read below the target; while matching, the peak guard contains
-newly encountered louder peaks as the gain settles. The guard limits sample
-peaks, rather than reconstructed intersample peaks.
+Quieter passages read below the target; newly encountered louder peaks pass
+through the smooth gain while the matcher adapts.
 
 The initializer creates a local git repository on main and stages generated files. Review and commit that local repository before remote setup.
 

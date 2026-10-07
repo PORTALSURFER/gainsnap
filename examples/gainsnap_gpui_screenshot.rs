@@ -267,6 +267,10 @@ mod macos {
     }
 
     unsafe fn send_click(window: id, x: f64, top_y: f64) {
+        send_click_count(window, x, top_y, 1);
+    }
+
+    unsafe fn send_click_count(window: id, x: f64, top_y: f64, count: isize) {
         let window_number: isize = msg_send![window, windowNumber];
         let location = NSPoint::new(x, f64::from(OUTPUT_HEIGHT) - top_y);
         for event_type in [1_usize, 2_usize] {
@@ -279,7 +283,7 @@ mod macos {
                 windowNumber: window_number
                 context: std::ptr::null_mut::<Object>()
                 eventNumber: 1_isize
-                clickCount: 1_isize
+                clickCount: count
                 pressure: 1.0_f64
             ];
             let _: () = msg_send![window, sendEvent: click];
@@ -970,6 +974,61 @@ mod macos {
         assert_eq!(params.restart_generation(), generation + 2);
         assert!(params.match_requested(), "rematch keeps Match enabled");
         pump_appkit(app, &gui, 0.12);
+        // New controls remain live through panels; presets edit mode/target
+        // without implicitly starting/stopping Match.
+        send_click(fixture.window, 144.0, 258.0);
+        pump_appkit(app, &gui, 0.04);
+        let (w, h, pixels) = gui.capture_rgba().expect("preset panel");
+        write_capture(&output_root(), "presets", w, h, pixels);
+        let match_before_preset = params.match_requested();
+        // Check every row, including the last one, in the compact panel.
+        for (index, target) in [-12.0, -14.0, -16.0, -18.0, -20.0, -22.0, 0.0]
+            .into_iter()
+            .enumerate()
+        {
+            if index > 0 {
+                send_click(fixture.window, 144.0, 258.0);
+                pump_appkit(app, &gui, 0.04);
+            }
+            send_click(fixture.window, 85.0, 103.0 + index as f64 * 36.0);
+            pump_appkit(app, &gui, 0.04);
+            assert!(!params.rms_mode(), "preset {index} uses Peak");
+            assert_eq!(params.target_db(), target, "preset {index} target");
+            assert_eq!(params.match_requested(), match_before_preset);
+        }
+
+        send_click(fixture.window, 179.0, 53.0);
+        pump_appkit(app, &gui, 0.04);
+        let (w, h, pixels) = gui.capture_rgba().expect("help panel");
+        write_capture(&output_root(), "help", w, h, pixels);
+        let space_before = HOST_SPACE_DOWN.load(Ordering::Relaxed);
+        send_key(app, fixture.window, &gui, " ", 49, 0);
+        assert!(
+            HOST_SPACE_DOWN.load(Ordering::Relaxed) > space_before,
+            "Help keeps host Space available"
+        );
+        send_key(app, fixture.window, &gui, "\u{1b}", 53, 0);
+        pump_appkit(app, &gui, 0.04);
+        // All gain reset surfaces return to unity and stop Match.
+        for (x, y) in [(144.0, 304.0), (81.0, 123.0), (144.0, 346.0)] {
+            params.set_param(toybox::clack_plugin::utils::ClapId::new(3), 7.0);
+            pump_appkit(app, &gui, 0.04);
+            send_click_count(fixture.window, x, y, 2);
+            pump_appkit(app, &gui, 0.04);
+            assert_eq!(
+                params.locked_gain_db(),
+                0.0,
+                "double-click gain reset at {x},{y}"
+            );
+            assert!(!params.match_requested());
+        }
+        for (x, y) in [(40.0, 124.0), (60.0, 386.0)] {
+            params.set_param(toybox::clack_plugin::utils::ClapId::new(1), -18.0);
+            pump_appkit(app, &gui, 0.04);
+            send_click_count(fixture.window, x, y, 2);
+            pump_appkit(app, &gui, 0.04);
+            assert_eq!(params.target_db(), -12.0, "double-click target reset");
+        }
         eprintln!(
             "PASS native GPUI GainSnap numeric editing, dragging, clipboard, host Space forwarding, and focused-button Enter activation"
         );
@@ -1102,6 +1161,7 @@ mod macos {
             capture_state(&fixture, &root, "initial-ui", false, true, false);
             capture_state(&fixture, &root, "manual", false, true, false);
             capture_state(&fixture, &root, "matched", true, true, false);
+            capture_state(&fixture, &root, "below-target", true, true, false);
             capture_state(&fixture, &root, "held", false, true, false);
             capture_state(&fixture, &root, "no-signal", false, true, false);
             capture_state(&fixture, &root, "matching-bright", true, true, false);

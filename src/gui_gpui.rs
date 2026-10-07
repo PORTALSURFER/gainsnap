@@ -361,6 +361,8 @@ struct DisplaySnapshot {
     gain_db: u32,
     state: MatchState,
     activity: MatchActivity,
+    applied_gain_db: u32,
+    shortfall_db: u32,
 }
 
 impl DisplaySnapshot {
@@ -378,7 +380,77 @@ impl DisplaySnapshot {
             gain_db: params.locked_gain_db().to_bits(),
             state: status.state(),
             activity: status.activity(),
+            applied_gain_db: status.applied_gain_db().to_bits(),
+            shortfall_db: status.target_shortfall_db().to_bits(),
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum InfoPanel {
+    Presets,
+    Help,
+}
+
+#[derive(Clone, Copy)]
+struct TargetPreset {
+    label: &'static str,
+    target_db: f32,
+    rms: bool,
+}
+
+const TECHNO_PRESETS: [TargetPreset; 7] = [
+    TargetPreset {
+        label: "Kick · −12",
+        target_db: -12.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Sub · −14",
+        target_db: -14.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Tom / Mid-bass · −16",
+        target_db: -16.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Percs · −18",
+        target_db: -18.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Textures / Synths · −20",
+        target_db: -20.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Effects · −22",
+        target_db: -22.0,
+        rms: false,
+    },
+    TargetPreset {
+        label: "Normalize · 0",
+        target_db: 0.0,
+        rms: false,
+    },
+];
+
+struct ControlHint(&'static str);
+impl Render for ControlHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        div()
+            .w(px(176.0))
+            .p(px(8.0))
+            .bg(solid(RECESS_TOP))
+            .border_1()
+            .border_color(solid(OUTLINE))
+            .font(font("Ioskeley Mono"))
+            .text_size(px(10.0))
+            .line_height(px(14.0))
+            .text_color(solid(TEXT_PRIMARY))
+            .child(self.0)
     }
 }
 
@@ -679,6 +751,14 @@ pub(crate) struct GainSnapEditor {
     knob_drag_start_gain_db: f32,
     target_drag_offset_y: f32,
     numeric_drag: Option<(bool, Point<Pixels>, f32, bool)>,
+    panel: Option<InfoPanel>,
+    help_focus: FocusHandle,
+    preset_focus: FocusHandle,
+    close_focus: FocusHandle,
+    preset_row_focus: [FocusHandle; TECHNO_PRESETS.len()],
+    applied_gain_previous: f32,
+    gain_direction: i8,
+    gain_direction_until: Instant,
     last_display_snapshot: DisplaySnapshot,
 }
 
@@ -767,6 +847,7 @@ impl GainSnapEditor {
             });
         let last_display_snapshot =
             DisplaySnapshot::capture(&controller.params, &controller.status);
+        let applied_gain_previous = controller.status.applied_gain_db();
         Self {
             controller,
             target_input,
@@ -796,6 +877,14 @@ impl GainSnapEditor {
             knob_drag_start_gain_db: 0.0,
             target_drag_offset_y: 0.0,
             numeric_drag: None,
+            panel: None,
+            help_focus: cx.focus_handle(),
+            preset_focus: cx.focus_handle(),
+            close_focus: cx.focus_handle(),
+            preset_row_focus: std::array::from_fn(|_| cx.focus_handle()),
+            applied_gain_previous,
+            gain_direction: 0,
+            gain_direction_until: Instant::now(),
             last_display_snapshot,
         }
     }
@@ -848,7 +937,16 @@ impl GainSnapEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let button_focused = self.peak_focus_handle.is_focused(window)
+        if self.panel.is_some() {
+            if event.keystroke.key == "escape" {
+                self.close_panel(window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        let button_focused = self.help_focus.is_focused(window)
+            || self.preset_focus.is_focused(window)
+            || self.peak_focus_handle.is_focused(window)
             || self.rms_focus_handle.is_focused(window)
             || self.match_focus_handle.is_focused(window)
             || self.restart_focus_handle.is_focused(window);
@@ -944,6 +1042,17 @@ impl GainSnapEditor {
         if let Some(bounds) = bounds {
             let track = target_meter_track(bounds);
             self.gain_marker_selected = f32::from(event.position.x) >= f32::from(track.right());
+            if event.click_count >= 2 {
+                self.target_dragging = false;
+                self.gain_dragging = false;
+                if self.gain_marker_selected {
+                    self.reset_gain(cx);
+                } else {
+                    self.reset_target(cx);
+                }
+                cx.notify();
+                return;
+            }
             if self.gain_marker_selected {
                 self.controller.activate_manual();
                 self.gain_dragging = true;
@@ -1016,12 +1125,8 @@ impl GainSnapEditor {
         self.controller.activate_manual();
         if event.click_count >= 2 {
             self.knob_dragging = false;
-            let gain_db = self.controller.manual_gain_db();
-            self.gain_input.update(cx, |input, cx| {
-                input.set_value(gain_db, cx);
-                input.set_editing(true, cx);
-            });
-            window.focus(&self.gain_input.read(cx).focus_handle(), cx);
+            self.reset_gain(cx);
+            window.focus(&self.knob_focus_handle, cx);
             cx.notify();
             return;
         }
@@ -1054,8 +1159,14 @@ impl GainSnapEditor {
         &mut self,
         event: &MouseDownEvent,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        if event.click_count >= 2 {
+            self.numeric_drag = None;
+            self.reset_target(cx);
+            cx.stop_propagation();
+            return;
+        }
         self.numeric_drag = Some((false, event.position, self.controller.target_db(), false));
     }
 
@@ -1063,14 +1174,166 @@ impl GainSnapEditor {
         &mut self,
         event: &MouseDownEvent,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        if event.click_count >= 2 {
+            self.numeric_drag = None;
+            self.reset_gain(cx);
+            cx.stop_propagation();
+            return;
+        }
         self.numeric_drag = Some((
             true,
             event.position,
             self.controller.manual_gain_db(),
             false,
         ));
+    }
+
+    fn reset_target(&mut self, cx: &mut Context<Self>) {
+        self.controller.set_target_db(TARGET_RANGE.default);
+        self.target_input
+            .update(cx, |input, cx| input.set_editing(false, cx));
+        self.set_target_text_force(self.controller.target_text(), cx);
+        cx.notify();
+    }
+
+    fn reset_gain(&mut self, cx: &mut Context<Self>) {
+        self.controller.activate_manual();
+        self.controller.set_manual_gain_db(0.0);
+        self.gain_input.update(cx, |input, cx| {
+            input.set_editing(false, cx);
+            input.set_value(0.0, cx);
+            input.set_text(format_gain_text(0.0), cx);
+        });
+        cx.notify();
+    }
+
+    fn open_panel(&mut self, panel: InfoPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = Some(panel);
+        self.target_dragging = false;
+        self.gain_dragging = false;
+        self.knob_dragging = false;
+        self.numeric_drag = None;
+        window.focus(&self.close_focus, cx);
+        cx.notify();
+    }
+
+    fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panel.take();
+        window.focus(
+            if panel == Some(InfoPanel::Presets) {
+                &self.preset_focus
+            } else {
+                &self.help_focus
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn apply_preset(&mut self, preset: TargetPreset, window: &mut Window, cx: &mut Context<Self>) {
+        self.controller.toggle_value(PARAM_RMS_MODE, preset.rms);
+        self.controller.set_target_db(preset.target_db);
+        self.target_input
+            .update(cx, |input, cx| input.set_editing(false, cx));
+        self.set_target_text_force(self.controller.target_text(), cx);
+        self.close_panel(window, cx);
+    }
+
+    fn render_panel(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let panel = self.panel.unwrap();
+        let mut body = div()
+            .absolute()
+            .left(px(12.0))
+            .top(px(54.0))
+            .w(px(176.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0));
+        if panel == InfoPanel::Presets {
+            body = body.gap(px(6.0)).child(
+                div()
+                    .text_size(px(10.0))
+                    .line_height(px(14.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("Techno starting points. Peak targets in dBFS."),
+            );
+            for (index, preset) in TECHNO_PRESETS.iter().copied().enumerate() {
+                body = body.child(
+                    utility_button(
+                        ("preset-row", index),
+                        preset.label,
+                        &self.preset_row_focus[index],
+                        window,
+                        cx.listener(move |view, _, window, cx| {
+                            view.apply_preset(preset, window, cx)
+                        }),
+                    )
+                    .w(px(176.0))
+                    .h(px(30.0)),
+                );
+            }
+            body = body.child(
+                div()
+                    .text_size(px(10.0))
+                    .line_height(px(14.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("Select, then enable Match. Active Match follows the new target."),
+            );
+        } else {
+            for (heading, text) in [
+                ("Peak / RMS", "Peak: transients. RMS: strongest 300 ms window, not LUFS."),
+                ("Match / Restart", "Match listens, then adjusts. Turn off to hold gain. Restart measures again."),
+                ("Target / Gain", "Left: target dBFS. Right: gain dB, on its own scale."),
+                ("Applied / Shortfall", "Applied includes gain smoothing. Shortfall: the gain range blocks the RMS target."),
+                ("Shortcuts", "Drag or type numbers. Shift: finer steps. Double-click: gain 0, target −12. Enter: confirm. Space: DAW transport."),
+            ] {
+                body = body.child(div().flex().flex_col().gap(px(2.0))
+                    .child(div().text_size(px(11.0)).text_color(solid(TEXT_PRIMARY)).child(heading))
+                    .child(div().text_size(px(10.0)).line_height(px(13.0)).text_color(solid(TEXT_MUTED)).child(text)));
+            }
+        }
+        div()
+            .id("info-panel")
+            .relative()
+            .w(px(WINDOW_WIDTH as f32))
+            .h(px(WINDOW_HEIGHT as f32))
+            .bg(solid(BG_PRIMARY))
+            .font(font("Ioskeley Mono"))
+            .text_color(solid(TEXT_PRIMARY))
+            .on_key_down(cx.listener(Self::handle_key_down))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(12.0))
+                    .top(px(20.0))
+                    .text_size(px(13.0))
+                    .child(if panel == InfoPanel::Presets {
+                        "PRESETS"
+                    } else {
+                        "HELP"
+                    }),
+            )
+            .child(
+                utility_button(
+                    "close-panel",
+                    "Close",
+                    &self.close_focus,
+                    window,
+                    cx.listener(|view, _, window, cx| view.close_panel(window, cx)),
+                )
+                .absolute()
+                .left(px(142.0))
+                .top(px(16.0))
+                .w(px(46.0))
+                .h(px(24.0)),
+            )
+            .child(body)
     }
 
     fn numeric_mouse_move(
@@ -1162,7 +1425,17 @@ impl GainSnapEditor {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
         let meter_changed = self.controller.advance_meter_at(now);
-        self.controller.advance_pulse_at(now);
+        let pulse_changed = self.controller.advance_pulse_at(now);
+        let previous_direction = self.gain_direction;
+        let applied = self.controller.status.applied_gain_db();
+        let change = applied - self.applied_gain_previous;
+        if change.abs() >= 0.01 {
+            self.gain_direction = if change > 0.0 { 1 } else { -1 };
+            self.gain_direction_until = now + Duration::from_millis(250);
+        } else if now >= self.gain_direction_until {
+            self.gain_direction = 0;
+        }
+        self.applied_gain_previous = applied;
         let snapshot = DisplaySnapshot::capture(&self.controller.params, &self.controller.status);
         if snapshot != self.last_display_snapshot {
             self.last_display_snapshot = snapshot;
@@ -1177,13 +1450,57 @@ impl GainSnapEditor {
             }
             cx.notify();
         }
-        if meter_changed {
+        if meter_changed || pulse_changed || previous_direction != self.gain_direction {
             cx.notify();
         }
         // The host can begin processing after the first editor paint. Keep
         // sampling telemetry while the editor is open, even after silence.
         window.request_animation_frame();
     }
+}
+
+fn utility_button(
+    id: impl Into<gpui::ElementId>,
+    text: &'static str,
+    focus: &FocusHandle,
+    window: &Window,
+    listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let on_down = focus.clone();
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .track_focus(focus)
+        .bg(vertical_gradient(BUTTON_IDLE_TOP, BUTTON_IDLE_BOTTOM))
+        .border_1()
+        .border_color(solid(if focus.is_focused(window) {
+            0xc8e4d1
+        } else {
+            BORDER_EMPHASIS
+        }))
+        .when(focus.is_focused(window), |element| element.border_2())
+        .rounded(px(3.0))
+        .font(font("Ioskeley Mono"))
+        .text_size(px(10.0))
+        .line_height(px(13.0))
+        .text_color(solid(TEXT_PRIMARY))
+        .role(gpui::Role::Button)
+        .aria_label(if text == "?" {
+            "Help and shortcuts"
+        } else {
+            text
+        })
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.focus(&on_down, cx)
+        })
+        .on_click(move |event, window, cx| {
+            if !is_space_click(event) {
+                listener(event, window, cx);
+            }
+        })
+        .child(text)
 }
 
 fn hardware_button_element(
@@ -1644,7 +1961,7 @@ fn paint_knob_control(bounds: Bounds<Pixels>, gain_db: f32, focused: bool, windo
         window.paint_path(path, vertical_gradient(KNOB_CAP_TOP, KNOB_CAP_BOTTOM));
     }
     if focused {
-        paint_circle(center_x, center_y, 21.5, 0.8, ACCENT, window);
+        paint_circle(center_x, center_y, 21.5, 1.5, 0xc8e4d1, window);
     }
     paint_knob_marker(bounds, gain_db, window);
 }
@@ -1654,6 +1971,9 @@ impl Render for GainSnapEditor {
         #[cfg(target_os = "macos")]
         crate::host_space::install(window);
         self.tick(window, cx);
+        if self.panel.is_some() {
+            return self.render_panel(window, cx);
+        }
         let meter_bounds = Rc::clone(&self.meter_bounds);
         let target_db = self.controller.target_db();
         let output_peak_db = self.controller.output_peak_db;
@@ -1688,6 +2008,7 @@ impl Render for GainSnapEditor {
             .w(px(TARGET_CONTROL_WIDTH))
             .h(px(TARGET_METER_HEIGHT))
             .track_focus(&self.meter_focus_handle)
+            .tooltip(|_, cx| cx.new(|_| ControlHint("Left: target dBFS. Right: gain dB, independent of the output scale. Gain spans −36 to +120; unity sits at −12 on the meter. Double-click resets.")).into())
             .on_mouse_down(MouseButton::Left, cx.listener(Self::meter_mouse_down))
             .child(
                 canvas(
@@ -1725,6 +2046,8 @@ impl Render for GainSnapEditor {
             // the same scale when the field is painted by GPUI.
             .text_size(px(12.0))
             .line_height(px(14.0))
+            .tooltip(|_, cx| cx.new(|_| ControlHint("Target in dBFS. Click and type or drag vertically. Double-click resets to −12 dBFS.")).into())
+            .when(target_focused, |element| element.border_2())
             .aria_label(TARGET_ENTRY_AUTOMATION_LABEL)
             .child(self.target_input.clone());
         let target_entry = selectable_numeric_entry(
@@ -1761,6 +2084,12 @@ impl Render for GainSnapEditor {
             .h(px(KNOB_SIZE))
             .rounded_full()
             .bg(rgba(0))
+            .tooltip(|_, cx| {
+                cx.new(|_| {
+                    ControlHint("Gain in dB. Drag or use arrows. Double-click resets to 0 dB.")
+                })
+                .into()
+            })
             .aria_label("Coarse manual gain, drag vertically or use arrow keys")
             .track_focus(&self.knob_focus_handle)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::knob_mouse_down))
@@ -1796,6 +2125,8 @@ impl Render for GainSnapEditor {
             .text_color(solid(TEXT_PRIMARY))
             .text_size(px(12.0))
             .line_height(px(14.0))
+            .when(self.gain_input.read(cx).focus_handle().is_focused(window), |element| element.border_2())
+            .tooltip(|_, cx| cx.new(|_| ControlHint("Gain in dB. Click and type or drag vertically. Double-click resets to 0 dB.")).into())
             .child(self.gain_input.clone());
         let gain_entry = selectable_numeric_entry(
             gain_entry,
@@ -1884,7 +2215,7 @@ impl Render for GainSnapEditor {
             .on_click(cx.listener(Self::select_peak_mode))
             .child(
                 div()
-                    .text_size(px(9.0))
+                    .text_size(px(10.0))
                     .text_color(solid(ACCENT))
                     .child(format!("PK {}", format_meter_readout(output_peak_db))),
             );
@@ -1919,10 +2250,90 @@ impl Render for GainSnapEditor {
             .on_click(cx.listener(Self::select_rms_mode))
             .child(
                 div()
-                    .text_size(px(9.0))
+                    .text_size(px(10.0))
                     .text_color(solid(RMS_COLOR))
                     .child(format!("RMS {}", format_meter_readout(output_rms_db))),
             );
+        let applied = self.controller.status.applied_gain_db();
+        let motion = match match_activity {
+            MatchActivity::Adjusting if self.gain_direction > 0 => "INCREASING",
+            MatchActivity::Adjusting if self.gain_direction < 0 => "DECREASING",
+            MatchActivity::Adjusting => "SETTLING",
+            MatchActivity::Matched | MatchActivity::BelowTarget => "SETTLED",
+            MatchActivity::Listening => "LISTENING",
+            _ => "HELD",
+        };
+        let correction = div()
+            .absolute()
+            .left(px(104.0))
+            .top(px(164.0))
+            .w(px(80.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(3.0))
+            .child(
+                div()
+                    .text_size(px(8.0))
+                    .line_height(px(10.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child("APPLIED dB"),
+            )
+            .child(
+                div()
+                    .text_size(px(14.0))
+                    .line_height(px(17.0))
+                    .child(format_gain_text(applied)),
+            )
+            .child(
+                div()
+                    .text_size(px(8.0))
+                    .line_height(px(10.0))
+                    .text_color(solid(TEXT_MUTED))
+                    .child(motion),
+            );
+        let shortfall = self.controller.status.target_shortfall_db();
+        let deficit = div().id("target-shortfall").absolute().left(px(104.0)).top(px(212.0)).w(px(80.0))
+            .flex().flex_col().items_center().gap(px(3.0))
+            .text_size(px(8.0)).line_height(px(11.0)).text_color(solid(ACCENT))
+            .tooltip(|_, cx| cx.new(|_| ControlHint("RMS shortfall uses the retained measurement, not the quieter current beat. The gain range limits correction. Peaks above 0 dBFS pass through to the host.")).into())
+            .child(format!("{shortfall:.1} dB SHORT"))
+            .child(div().text_color(solid(TEXT_MUTED)).child("GAIN LIMIT"));
+        let presets = utility_button(
+            "presets",
+            "Presets",
+            &self.preset_focus,
+            window,
+            cx.listener(|view, _, window, cx| view.open_panel(InfoPanel::Presets, window, cx)),
+        )
+        .absolute()
+        .left(px(112.0))
+        .top(px(246.0))
+        .w(px(64.0))
+        .h(px(24.0));
+        let help = utility_button(
+            "help",
+            "?",
+            &self.help_focus,
+            window,
+            cx.listener(|view, _, window, cx| view.open_panel(InfoPanel::Help, window, cx)),
+        )
+        .absolute()
+        .left(px(170.0))
+        .top(px(44.0))
+        .w(px(18.0))
+        .h(px(18.0));
+        let gain_label = div()
+            .absolute()
+            .left(px(104.0))
+            .top(px(272.0))
+            .w(px(80.0))
+            .flex()
+            .justify_center()
+            .text_size(px(8.0))
+            .line_height(px(10.0))
+            .text_color(solid(TEXT_MUTED))
+            .child("GAIN dB");
         let meter_move = cx.listener(Self::meter_mouse_move);
         let meter_up = cx.listener(Self::meter_mouse_up);
         let numeric_move = cx.listener(Self::numeric_mouse_move);
@@ -2002,7 +2413,7 @@ impl Render for GainSnapEditor {
                             concat!("v", env!("CARGO_PKG_VERSION")),
                             point(px(172.0), px(9.0)),
                             6.0,
-                            TEXT_MUTED,
+                            0x6c776f,
                             window,
                             cx,
                         );
@@ -2029,6 +2440,14 @@ impl Render for GainSnapEditor {
             .child(rms_readout)
             .when(show_activity_label, |element| element.child(activity_label))
             .child(activity_rail)
+            .child(correction)
+            .when(
+                match_activity == MatchActivity::BelowTarget && shortfall > 0.0,
+                |element| element.child(deficit),
+            )
+            .child(presets)
+            .child(help)
+            .child(gain_label)
             .child(drag_events)
     }
 }
@@ -2275,23 +2694,30 @@ fn paint_meter(bounds: Bounds<Pixels>, state: MeterPaintState, window: &mut Wind
             state.output_peak_hold_db,
             track.left(),
             track.left() + px(half_width),
-            ACCENT,
+            0xffa38e,
         ),
         (
             state.output_rms_hold_db,
             track.left() + px(half_width),
             track.right(),
-            RMS_COLOR,
+            0xc4a3ed,
         ),
     ] {
         if level_db <= TARGET_MIN_DB {
             continue;
         }
-        let y = px(target_marker_center_y(bounds, level_db).unwrap_or(f32::from(track.bottom())));
+        // A distinct cap stays legible above the live bar at the compact size.
+        // Keep the two-pixel stripe inside the track at both scale endpoints.
+        let y = px(target_marker_center_y(bounds, level_db)
+            .unwrap_or(f32::from(track.bottom()))
+            .clamp(
+                f32::from(track.top()) + 1.0,
+                f32::from(track.bottom()) - 3.0,
+            ));
         window.paint_quad(fill(
             Bounds::from_corners(
                 point(left + px(1.0), y),
-                point(right - px(1.0), y + px(1.0)),
+                point(right - px(1.0), y + px(2.0)),
             ),
             solid(color),
         ));
@@ -2496,6 +2922,14 @@ pub fn configure_screenshot_state(
 ) {
     let _ = status.take_meter_maxima();
     let (peak_db, rms_db, gain_db, state, activity, matching) = match name {
+        "below-target" => (
+            0.0,
+            -14.4,
+            6.0,
+            MatchState::Measuring,
+            MatchActivity::BelowTarget,
+            true,
+        ),
         "matched" => (
             -3.0,
             -12.0,
@@ -2541,6 +2975,14 @@ pub fn configure_screenshot_state(
     params.set_param(PARAM_MANUAL_MODE, 1.0);
     params.set_param(PARAM_MANUAL_GAIN_DB, gain_db);
     params.set_param(PARAM_LOCKED_GAIN_DB, gain_db);
+    status.update_correction_feedback(
+        gain_db,
+        if activity == MatchActivity::BelowTarget {
+            2.4
+        } else {
+            0.0
+        },
+    );
     status.update_with_activity(peak_db - gain_db, peak_db, gain_db, 0.0, state, activity);
     status.update_rms(rms_db);
 }

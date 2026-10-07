@@ -35,3 +35,9 @@ max_evidence_bytes = 1048576
 
 [announcements]
 enabled = false
+
+[documentation]
+enabled = true
+source_dir = "docs/manual"
+manual_name = "GainSnap Manual"
+subtitle = "Match and hold gain in your DAW"

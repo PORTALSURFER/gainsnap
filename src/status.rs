@@ -39,7 +39,7 @@ pub enum MatchActivity {
     Adjusting = 4,
     /// Match is enabled and the correction has settled.
     Matched = 5,
-    /// Match cannot reach the selected RMS target with the available peak headroom or gain range.
+    /// Match cannot reach the selected RMS target with the available gain range.
     BelowTarget = 6,
 }
 
@@ -92,6 +92,8 @@ pub struct GuiStatus {
     pending_peak_max: AtomicU32,
     pending_rms_max: AtomicU32,
     locked_gain_db: AtomicU32,
+    applied_gain_db: AtomicU32,
+    target_shortfall_db: AtomicU32,
     progress: AtomicU32,
     state: AtomicU32,
     activity: AtomicU32,
@@ -113,6 +115,8 @@ impl GuiStatus {
             pending_peak_max: AtomicU32::new(0),
             pending_rms_max: AtomicU32::new(0),
             locked_gain_db: AtomicU32::new(0.0_f32.to_bits()),
+            applied_gain_db: AtomicU32::new(0.0_f32.to_bits()),
+            target_shortfall_db: AtomicU32::new(0.0_f32.to_bits()),
             progress: AtomicU32::new(0.0_f32.to_bits()),
             state: AtomicU32::new(MatchState::Ready as u32),
             activity: AtomicU32::new(MatchActivity::Ready as u32),
@@ -164,7 +168,37 @@ impl GuiStatus {
         self.activity.store(activity as u32, Ordering::Relaxed);
     }
 
-    /// Publish protected output RMS without changing peak telemetry.
+    /// Publish correction feedback without adding host parameters or realtime locks.
+    pub fn update_correction_feedback(&self, applied_gain_db: f32, shortfall_db: f32) {
+        let applied = if applied_gain_db.is_finite() {
+            applied_gain_db.clamp(-120.0, 120.0)
+        } else {
+            0.0
+        };
+        self.applied_gain_db
+            .store(applied.to_bits(), Ordering::Relaxed);
+        let shortfall = if shortfall_db.is_finite() {
+            shortfall_db.clamp(0.0, 120.0)
+        } else {
+            0.0
+        };
+        self.target_shortfall_db
+            .store(shortfall.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read actual applied gain, including gain smoothing.
+    #[allow(dead_code)]
+    pub fn applied_gain_db(&self) -> f32 {
+        read_f32(&self.applied_gain_db)
+    }
+
+    /// Read the measured RMS target deficit in dB.
+    #[allow(dead_code)]
+    pub fn target_shortfall_db(&self) -> f32 {
+        read_f32(&self.target_shortfall_db)
+    }
+
+    /// Publish output RMS without changing peak telemetry.
     pub fn update_rms(&self, db: f32) {
         self.output_rms_db
             .store(sanitize_db(db).to_bits(), Ordering::Relaxed);
@@ -241,7 +275,6 @@ impl GuiStatus {
     }
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "gpui-gui"))]
 fn read_f32(value: &AtomicU32) -> f32 {
     f32::from_bits(value.load(Ordering::Relaxed))
 }
@@ -272,6 +305,20 @@ fn publish_meter_maximum(pending: &AtomicU32, db: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn correction_feedback_preserves_large_gain_and_sanitizes_invalid_values() {
+        let status = GuiStatus::new();
+        status.update_correction_feedback(80.0, 2.4);
+        assert_eq!(status.applied_gain_db(), 80.0);
+        assert_eq!(status.target_shortfall_db(), 2.4);
+        status.update_correction_feedback(-80.0, -3.0);
+        assert_eq!(status.applied_gain_db(), -80.0);
+        assert_eq!(status.target_shortfall_db(), 0.0);
+        status.update_correction_feedback(f32::NAN, f32::INFINITY);
+        assert_eq!(status.applied_gain_db(), 0.0);
+        assert_eq!(status.target_shortfall_db(), 0.0);
+    }
 
     fn publish_peak(status: &GuiStatus, db: f32) {
         status.update_with_activity(

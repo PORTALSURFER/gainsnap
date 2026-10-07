@@ -327,6 +327,9 @@ impl<'a> PluginAudioProcessor<'a, GainSnapShared, GainSnapMainThread<'a>>
         self.apply_remaining_timeline();
 
         let report = self.engine.report();
+        self.shared
+            .status
+            .update_correction_feedback(report.applied_gain_db, report.target_shortfall_db);
         self.shared.status.update_rms(report.output_rms_db);
         self.shared.status.update_with_activity(
             report.input_peak_db,

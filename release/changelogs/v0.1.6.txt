@@ -1,0 +1,13 @@
+GainSnap v0.1.6
+
+Features
+- Add techno presets that follow Peak/RMS mode, with targets designed for a +12 dB main-bus boost. Presets preserve whether Match is on or off.
+- Show actual applied gain, adjustment direction, and the retained RMS target shortfall when gain is limited.
+- Double-click gain controls to reset to 0 dB and stop Match, or target controls to reset to −12 dBFS.
+- Add offline PDF and HTML user manuals.
+
+Improvements
+- Pass audio above 0 dBFS without limiting transients. RMS matching no longer caps gain by peak headroom; its +24 dB boost limit remains.
+- Add compact Help, control hints, clearer gain labels, and more visible keyboard focus.
+- Make floating Peak and RMS meter stripes brighter and thicker for easier reading.
+- Remove the meter-triangle hover tooltip so it no longer obscures the view.

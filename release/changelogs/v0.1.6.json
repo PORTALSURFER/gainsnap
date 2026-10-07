@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "version": "0.1.6",
+  "source_head": "015345b22c48647f7259cb8b1714e25b7f8bf3c5",
+  "base_tag": "v0.1.4",
+  "base_commit": "22741169f399c404d89f8f022e5f3f160742a546",
+  "entries": [
+    {
+      "category": "improvement",
+      "description": "Pass audio above 0 dBFS without limiting transients. RMS matching no longer caps gain by peak headroom; its +24 dB boost limit remains.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Add techno presets that follow Peak/RMS mode, with targets designed for a +12 dB main-bus boost. Presets preserve whether Match is on or off.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93",
+        "f65c8dfbb519d57eb7eaff2a9bc4d924ff33a629"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Show actual applied gain, adjustment direction, and the retained RMS target shortfall when gain is limited.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Double-click gain controls to reset to 0 dB and stop Match, or target controls to reset to −12 dBFS.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Add compact Help, control hints, clearer gain labels, and more visible keyboard focus.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Make floating Peak and RMS meter stripes brighter and thicker for easier reading.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Remove the meter-triangle hover tooltip so it no longer obscures the view.",
+      "commits": [
+        "f65c8dfbb519d57eb7eaff2a9bc4d924ff33a629"
+      ]
+    },
+    {
+      "category": "feature",
+      "description": "Add offline PDF and HTML user manuals.",
+      "commits": [
+        "0a7e4ac17daf9d931f62644d70c60e2a834fcb93"
+      ]
+    }
+  ]
+}

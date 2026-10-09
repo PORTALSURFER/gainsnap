@@ -2,6 +2,8 @@
 
 Peak and RMS level matching for your DAW
 
+**Pay what you want, including €0.** Donations are optional; no license activation is needed.
+
 AudioDev plug-in repository (gainsnap), category **Utility**.
 
 ## Development

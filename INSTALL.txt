@@ -19,7 +19,8 @@ vertically, or click and type a value. Shift gives finer numeric-field steps.
 Space passes through to the host transport.
 
 This package contains the Apple Silicon macOS build only.
-GainSnap is free with optional donations; no license activation is needed.
+GainSnap is pay what you want, including EUR 0. Donations are optional;
+no license activation is needed.
 
 Open GainSnap Manual.pdf or GainSnap Manual.html for the full offline guide.
 CHANGELOG.txt lists changes in this release.

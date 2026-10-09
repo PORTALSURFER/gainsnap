@@ -8,7 +8,8 @@ lang: en
 GainSnap matches a track's Peak or RMS level to a target, then lets you hold the
 resulting gain. It applies smooth, linear gain without clipping or limiting
 signals at 0 dBFS. The macOS release is a VST3 for Apple Silicon Macs.
-GainSnap is free with optional donations and needs no account or license activation.
+GainSnap is **pay what you want, including €0**. Donations are optional;
+it needs no account or license activation.
 
 # Install and update
 

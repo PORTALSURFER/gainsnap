@@ -86,9 +86,9 @@ gain sits beside the meter's −12 dB mark. Its position does not represent the
 output level. The knob adjusts the same gain. Editing either gain control
 turns Match off.
 
-**Applied dB** reports the actual gain after smoothing. Increasing, Decreasing
-and Settling indicate adjustment; Settled means the correction has stopped
-moving. Orange Match pulses softly while listening or adjusting. **Below
+The matching indicator shows Listening, Adjusting, or Matched. The gain knob
+and its number field show the gain correction. Orange Match pulses softly
+while listening or adjusting. **Below
 Target** and the shortfall in dB mean the gain range prevents reaching the RMS
 target. The shortfall uses the retained measurement, not a quieter current beat.
 

@@ -711,9 +711,6 @@ pub(crate) struct GainSnapEditor {
     help_focus: FocusHandle,
     normalize_focus: FocusHandle,
     close_focus: FocusHandle,
-    applied_gain_previous: f32,
-    gain_direction: i8,
-    gain_direction_until: Instant,
     last_display_snapshot: DisplaySnapshot,
 }
 
@@ -802,7 +799,6 @@ impl GainSnapEditor {
             });
         let last_display_snapshot =
             DisplaySnapshot::capture(&controller.params, &controller.status);
-        let applied_gain_previous = controller.status.applied_gain_db();
         Self {
             controller,
             target_input,
@@ -836,9 +832,6 @@ impl GainSnapEditor {
             help_focus: cx.focus_handle(),
             normalize_focus: cx.focus_handle(),
             close_focus: cx.focus_handle(),
-            applied_gain_previous,
-            gain_direction: 0,
-            gain_direction_until: Instant::now(),
             last_display_snapshot,
         }
     }
@@ -1211,7 +1204,7 @@ impl GainSnapEditor {
                 ("Peak / RMS", "Peak: transients. RMS: strongest 300 ms window, not LUFS."),
                 ("Match / Normalize", "Normalize toggles Peak Match at 0 dBFS. Restart measures again."),
                 ("Target / Gain", "Left: target dBFS. Right: gain dB, on its own scale."),
-                ("Applied / Shortfall", "Applied includes gain smoothing. Shortfall: the gain range blocks the RMS target."),
+                ("RMS shortfall", "Shortfall means the gain range prevents reaching the RMS target."),
                 ("Shortcuts", "Drag or type numbers. Shift: finer steps. Double-click: gain 0, target −12. Enter: confirm. Space: DAW transport."),
             ] {
                 body = body.child(div().flex().flex_col().gap(px(2.0))
@@ -1353,16 +1346,6 @@ impl GainSnapEditor {
         let now = Instant::now();
         let meter_changed = self.controller.advance_meter_at(now);
         let pulse_changed = self.controller.advance_pulse_at(now);
-        let previous_direction = self.gain_direction;
-        let applied = self.controller.status.applied_gain_db();
-        let change = applied - self.applied_gain_previous;
-        if change.abs() >= 0.01 {
-            self.gain_direction = if change > 0.0 { 1 } else { -1 };
-            self.gain_direction_until = now + Duration::from_millis(250);
-        } else if now >= self.gain_direction_until {
-            self.gain_direction = 0;
-        }
-        self.applied_gain_previous = applied;
         let snapshot = DisplaySnapshot::capture(&self.controller.params, &self.controller.status);
         if snapshot != self.last_display_snapshot {
             self.last_display_snapshot = snapshot;
@@ -1377,7 +1360,7 @@ impl GainSnapEditor {
             }
             cx.notify();
         }
-        if meter_changed || pulse_changed || previous_direction != self.gain_direction {
+        if meter_changed || pulse_changed {
             cx.notify();
         }
         // The host can begin processing after the first editor paint. Keep
@@ -2181,44 +2164,6 @@ impl Render for GainSnapEditor {
                     .text_color(solid(RMS_COLOR))
                     .child(format!("RMS {}", format_meter_readout(output_rms_db))),
             );
-        let applied = self.controller.status.applied_gain_db();
-        let motion = match match_activity {
-            MatchActivity::Adjusting if self.gain_direction > 0 => "INCREASING",
-            MatchActivity::Adjusting if self.gain_direction < 0 => "DECREASING",
-            MatchActivity::Adjusting => "SETTLING",
-            MatchActivity::Matched | MatchActivity::BelowTarget => "SETTLED",
-            MatchActivity::Listening => "LISTENING",
-            _ => "HELD",
-        };
-        let correction = div()
-            .absolute()
-            .left(px(104.0))
-            .top(px(164.0))
-            .w(px(80.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(3.0))
-            .child(
-                div()
-                    .text_size(px(8.0))
-                    .line_height(px(10.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child("APPLIED dB"),
-            )
-            .child(
-                div()
-                    .text_size(px(14.0))
-                    .line_height(px(17.0))
-                    .child(format_gain_text(applied)),
-            )
-            .child(
-                div()
-                    .text_size(px(8.0))
-                    .line_height(px(10.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child(motion),
-            );
         let shortfall = self.controller.status.target_shortfall_db();
         let deficit = div().id("target-shortfall").absolute().left(px(104.0)).top(px(212.0)).w(px(80.0))
             .flex().flex_col().items_center().gap(px(3.0))
@@ -2386,7 +2331,6 @@ impl Render for GainSnapEditor {
             .child(rms_readout)
             .when(show_activity_label, |element| element.child(activity_label))
             .child(activity_rail)
-            .child(correction)
             .when(
                 match_activity == MatchActivity::BelowTarget && shortfall > 0.0,
                 |element| element.child(deficit),

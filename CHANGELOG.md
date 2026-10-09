@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remove the duplicate Applied dB and adjustment-status readout. Keep the
+  matching indicator, gain controls, and RMS shortfall feedback.
+
+## 0.1.7
+
 - Hold automatic matching until repeated signal evidence and a stable measurement
   establish confidence; isolated hits and silent preroll cannot trigger a boost.
   Bound matching gain changes to 24 dB per second and hold the audible gain when

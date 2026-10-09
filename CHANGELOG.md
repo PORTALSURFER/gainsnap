@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Make the Help button smaller and use a compact Sift-style shortcut menu with
+  orange key labels, omitting general usage and host transport shortcuts.
+
+- Extend target levels and gain attenuation down to −60 dB, including meter
+  dragging, numeric entry, matching, and saved state.
+
+## 0.1.8
+
 - Remove the duplicate Applied dB and adjustment-status readout. Keep the
   matching indicator, gain controls, and RMS shortfall feedback.
 

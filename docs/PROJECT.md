@@ -55,7 +55,7 @@ the editor shows Below target; it does not compress or limit transients to reach
 that target. The target applies to the strongest measured 300 ms
 window; the live RMS meter can read lower between transients.
 Peak correction supports up to +120 dB for usable signals above the -120 dBFS
-silence floor; RMS correction retains its +24 dB boost cap. The fixed -36 dB
+silence floor; RMS correction retains its +24 dB boost cap. The fixed -60 dB
 attenuation limit still applies; floating-point headroom is preserved.
 
 State version 6 stores one applied Gain value and restores Match off. Version 5

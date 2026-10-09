@@ -33,7 +33,7 @@ evidence requires another adjustment. Leave Match on until the loudest part has
 played. Press Restart, or turn Match off and on, to start a fresh measurement.
 Changing the target reuses the retained evidence; changing mode starts a new session.
 RMS permits peaks above its average target and above 0 dBFS.
-Peak targets that would require more than −36 dB attenuation or +120 dB boost
+Peak targets that would require more than −60 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
 matching retains its +24 dB boost cap. The meter
 always shows the actual output. The bottom-left N button toggles Normalize:
@@ -72,7 +72,7 @@ dB steps.
 Drag either numeric field vertically to adjust its value; hold Shift for finer steps.
 Both meter triangles and numeric field drags continue outside the editor until
 the mouse button is released. The gain triangle spans the full meter travel,
-with its −36 dB minimum at the bottom and unity at the −12 dB scale position.
+with its −60 dB minimum at the bottom and unity at the −12 dB scale position.
 Match lights orange and pulses softly while listening or adjusting.
 Space passes through to the host's transport, including when a button or numeric
 field is focused. Enter activates the focused button.

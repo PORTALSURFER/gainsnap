@@ -27,7 +27,7 @@ const MATCH_SLEW_DB_PER_SECOND: f32 = 24.0;
 const MATCH_ACTIVITY_HOLD_SECONDS: f32 = 0.2;
 const MATCH_ADAPTATION_STABILITY_RATIO: f32 = 1.059_253_7;
 const MATCH_ACTIVITY_MEANINGFUL_GAIN_RATIO: f32 = 1.001_151_3;
-const GAIN_MIN_LINEAR: f32 = 0.015_848_932;
+const GAIN_MIN_LINEAR: f32 = 0.001;
 // 10^(24 dB / 20), retained for the RMS path's existing boost limit.
 const RMS_GAIN_MAX_LINEAR: f32 = 15.848_932;
 const PEAK_GAIN_MAX_LINEAR: f32 = 1_000_000.0;
@@ -826,6 +826,31 @@ mod tests {
             engine.sync_controls(&params);
             assert_eq!(engine.process_frame(&params, 0.5, -0.25), before);
             assert!((params.locked_gain_db() - audible).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn peak_and_rms_match_minus_sixty_and_hold_it() {
+        for rms in [false, true] {
+            let params = rms_params();
+            params.set_param(crate::params::PARAM_RMS_MODE, f32::from(rms));
+            params.set_param(PARAM_TARGET_DB, -60.0);
+            assert_eq!(params.target_db(), -60.0);
+            let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+            run_block(&mut engine, &params, 1.0, 4_000);
+            let (left, right) = engine.process_frame(&params, 1.0, -0.5);
+            assert!((20.0 * left.log10() + 60.0).abs() < 0.01);
+            assert_eq!(right, -left * 0.5);
+            params.set_param(PARAM_MATCH, 0.0);
+            engine.sync_controls(&params);
+            assert!((params.locked_gain_db() + 60.0).abs() < 0.01);
+            let restored = GainSnapParams::new();
+            let payload = crate::state::encode_payload(&params);
+            let state =
+                crate::state::decode_payload(crate::state::STATE_VERSION, &payload).unwrap();
+            crate::state::apply_snapshot(&restored, state);
+            assert_eq!(restored.target_db(), -60.0);
+            assert!((restored.locked_gain_db() + 60.0).abs() < 0.01);
         }
     }
 
@@ -1898,7 +1923,7 @@ mod tests {
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
             engine.begin_block(&params);
             run_frames(&mut engine, &params, input, 48_000);
-            let expected_gain = (-12.0 - linear_to_db(input)).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
+            let expected_gain = (-12.0 - 20.0 * input.log10()).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
             assert!((engine.report().locked_gain_db - expected_gain).abs() < 0.01);
             let output = engine.process_frame(&params, f32::NAN, f32::INFINITY);
             assert_eq!(output, (0.0, 0.0));

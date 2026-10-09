@@ -28,7 +28,7 @@ mode, target and gain; it does not start a new Match pass automatically.
 # Match a track
 
 1. Choose **Peak** or **RMS** using the output readouts.
-2. Set a target using the left meter triangle or the number below the meter.
+2. Set a target from −60 to 0 dBFS using the left meter triangle or the number below the meter.
    You can also use Normalize.
 3. Turn on **Match** and play the loudest relevant section of the track.
 4. Wait for the correction to settle, then turn Match off to hold that gain.
@@ -63,7 +63,7 @@ between hits even though the correction remains settled. A full-scale square
 wave reads 0 dBFS RMS; a full-scale sine reads about −3.01 dBFS RMS.
 These are dBFS measurements, not LUFS loudness targets.
 
-Peak correction ranges from −36 to +120 dB. RMS correction retains a +24 dB
+Peak correction ranges from −60 to +120 dB. RMS correction retains a +24 dB
 boost cap. Signals at or below −120 dBFS are treated as silence. Gain range
 limits can prevent matching the selected target exactly.
 
@@ -81,7 +81,7 @@ has a floating stripe that holds its highest level for two seconds, then falls
 at 1.5 dB per second without dropping below the live bar.
 
 The **left triangle** sets the target in dBFS. The **right triangle** sets gain
-in dB on its own scale. Its −36 dB minimum sits at the meter bottom, and unity
+in dB on its own scale. Its −60 dB minimum sits at the meter bottom, and unity
 gain sits beside the meter's −12 dB mark. Its position does not represent the
 output level. The knob adjusts the same gain. Editing either gain control
 turns Match off.
@@ -103,7 +103,8 @@ target. The shortfall uses the retained measurement, not a quieter current beat.
 - Double-click a gain control to reset to 0 dB and stop Match. Double-click a
   target control to reset to −12 dBFS.
 - Space passes through to the DAW transport. Enter activates a focused button.
-- Open **?** for compact help. Escape closes Help.
+- Open **?** for the compact shortcut menu. Orange labels show GainSnap’s
+  control shortcuts. Escape or a click outside closes Help.
 
 # Floating-point headroom
 

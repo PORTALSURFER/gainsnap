@@ -22,13 +22,13 @@ pub const PARAM_MANUAL_GAIN_DB: ClapId = ClapId::new(5);
 pub const PARAM_MANUAL_MODE: ClapId = ClapId::new(6);
 
 /// Lowest supported target level in dBFS.
-pub const TARGET_MIN_DB: f32 = -36.0;
+pub const TARGET_MIN_DB: f32 = -60.0;
 /// Highest supported target level in dBFS, including the 0 dBFS normalize target.
 pub const TARGET_MAX_DB: f32 = 0.0;
 /// Default target level in dBFS.
 pub const DEFAULT_TARGET_DB: f32 = -12.0;
 /// Lowest gain correction GainSnap can apply.
-pub const GAIN_MIN_DB: f32 = -36.0;
+pub const GAIN_MIN_DB: f32 = -60.0;
 /// Highest peak-mode gain correction GainSnap can apply.
 ///
 /// Inputs at or below the -120 dBFS silence floor are not measured, so this
@@ -572,7 +572,7 @@ mod tests {
             assert_eq!(mode_info.step_count, 1);
             assert_eq!(mode_info.default_normalized, 1.0);
             let gain_info = vst3_param_info_for_index(2).unwrap();
-            assert!((gain_info.default_normalized - 36.0 / 156.0).abs() < 1.0e-12);
+            assert!((gain_info.default_normalized - 60.0 / 180.0).abs() < 1.0e-12);
             assert_eq!(
                 gain_info.default_normalized,
                 normalized_from_plain_value(PARAM_LOCKED_GAIN_DB, 0.0).unwrap()

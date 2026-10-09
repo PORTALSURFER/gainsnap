@@ -804,16 +804,16 @@ mod macos {
         pump_appkit(app, &gui, 0.03);
         assert!(params.manual_gain_db() < outside_gain);
         assert_eq!(
-            params.manual_gain_db(),
-            -36.0,
+            params.locked_gain_db(),
+            -60.0,
             "gain reaches the bottom endpoint"
         );
         send_pointer_event(fixture.window, 2, 300.0, 500.0);
         send_pointer_event(fixture.window, 6, 81.0, 80.0);
         pump_appkit(app, &gui, 0.03);
         assert_eq!(
-            params.manual_gain_db(),
-            -36.0,
+            params.locked_gain_db(),
+            -60.0,
             "released gain handle stays put"
         );
 
@@ -824,13 +824,13 @@ mod macos {
         send_pointer_event(fixture.window, 6, -100.0, 500.0);
         pump_appkit(app, &gui, 0.03);
         assert!(params.target_db() < outside_target);
-        assert_eq!(params.target_db(), -36.0);
+        assert_eq!(params.target_db(), -60.0);
         send_pointer_event(fixture.window, 2, -100.0, 500.0);
         send_pointer_event(fixture.window, 6, 40.0, 80.0);
         pump_appkit(app, &gui, 0.03);
         assert_eq!(
             params.target_db(),
-            -36.0,
+            -60.0,
             "released target handle stays put"
         );
 
@@ -839,25 +839,25 @@ mod macos {
         send_drag(fixture.window, 60.0, 386.0, 366.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
-            (params.target_db() + 34.0).abs() < 0.001,
+            (params.target_db() + 58.0).abs() < 0.001,
             "target field drag increases value"
         );
         send_drag(fixture.window, 60.0, 386.0, 396.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
-            (params.target_db() + 35.0).abs() < 0.001,
+            (params.target_db() + 59.0).abs() < 0.001,
             "target field drag decreases value"
         );
         send_drag_to(fixture.window, 144.0, 346.0, 300.0, 146.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
-            (params.manual_gain_db() + 16.0).abs() < 0.001,
+            (params.locked_gain_db() + 40.0).abs() < 0.001,
             "gain field drag follows pointer outside editor"
         );
         send_drag(fixture.window, 144.0, 346.0, 366.0);
         pump_appkit(app, &gui, 0.03);
         assert!(
-            (params.manual_gain_db() + 18.0).abs() < 0.001,
+            (params.locked_gain_db() + 42.0).abs() < 0.001,
             "gain field drag decreases value"
         );
 
@@ -885,11 +885,11 @@ mod macos {
 
         send_click(fixture.window, 63.0, 389.0);
         pump_appkit(app, &gui, 0.03);
-        for (text, key_code) in [("-", 27), ("3", 20), ("6", 22)] {
+        for (text, key_code) in [("-", 27), ("6", 22), ("0", 29)] {
             send_key(app, fixture.window, &gui, text, key_code, 0);
         }
         send_key(app, fixture.window, &gui, "\r", 36, 0);
-        assert_eq!(params.target_db(), -36.0);
+        assert_eq!(params.target_db(), -60.0);
         let (w, h, pixels) = gui.capture_rgba().expect("minimum target field capture");
         write_capture(&output_root(), "target-entry-minimum", w, h, pixels);
         send_click(fixture.window, 63.0, 389.0);

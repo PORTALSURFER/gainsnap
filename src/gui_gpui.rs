@@ -1192,58 +1192,87 @@ impl GainSnapEditor {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let mut body = div()
-            .absolute()
-            .left(px(12.0))
-            .top(px(54.0))
-            .w(px(176.0))
-            .flex()
-            .flex_col()
-            .gap(px(10.0));
-        for (heading, text) in [
-                ("Peak / RMS", "Peak: transients. RMS: strongest 300 ms window, not LUFS."),
-                ("Match / Normalize", "Normalize toggles Peak Match at 0 dBFS. Restart measures again."),
-                ("Target / Gain", "Left: target dBFS. Right: gain dB, on its own scale."),
-                ("RMS shortfall", "Shortfall means the gain range prevents reaching the RMS target."),
-                ("Shortcuts", "Drag or type numbers. Shift: finer steps. Double-click: gain 0, target −12. Enter: confirm. Space: DAW transport."),
-            ] {
-                body = body.child(div().flex().flex_col().gap(px(2.0))
-                    .child(div().text_size(px(11.0)).text_color(solid(TEXT_PRIMARY)).child(heading))
-                    .child(div().text_size(px(10.0)).line_height(px(13.0)).text_color(solid(TEXT_MUTED)).child(text)));
-            }
-
+        let rows = [
+            ("↑ ↓ ← →", "ADJUST FOCUSED CONTROL"),
+            ("SHIFT + ARROWS", "FINER STEPS"),
+            ("SHIFT + DRAG", "NUMBERS: FINER STEPS"),
+            ("SHIFT + DRAG", "KNOB / TRIANGLES: WHOLE DB"),
+            ("HOME / END", "TARGET: MIN / MAX"),
+        ];
         div()
             .id("info-panel")
-            .relative()
-            .w(px(WINDOW_WIDTH as f32))
-            .h(px(WINDOW_HEIGHT as f32))
-            .bg(solid(BG_PRIMARY))
+            .absolute()
+            .left(px(0.0))
+            .top(px(0.0))
+            .size_full()
+            .occlude()
+            .bg(rgba(0x141b1690))
             .font(font("Ioskeley Mono"))
             .text_color(solid(TEXT_PRIMARY))
             .on_key_down(cx.listener(Self::handle_key_down))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, window, cx| {
+                    view.close_panel(window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 div()
+                    .id("help-shortcuts")
                     .absolute()
-                    .left(px(12.0))
-                    .top(px(20.0))
-                    .text_size(px(13.0))
-                    .child("HELP"),
+                    .left(px(8.0))
+                    .top(px(44.0))
+                    .w(px(184.0))
+                    .p(px(10.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(help_panel_surface())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_size(px(9.0))
+                            .child("SHORTCUTS")
+                            .child(
+                                utility_button(
+                                    "close-panel",
+                                    "×",
+                                    &self.close_focus,
+                                    window,
+                                    cx.listener(|view, _, window, cx| view.close_panel(window, cx)),
+                                )
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .aria_label("Close help"),
+                            ),
+                    )
+                    .children(rows.into_iter().map(|(shortcut, description)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .text_size(px(8.0))
+                            .line_height(px(11.0))
+                            .child(
+                                div()
+                                    .w(px(72.0))
+                                    .flex_shrink_0()
+                                    .text_color(solid(ACCENT))
+                                    .child(shortcut),
+                            )
+                            .child(
+                                div()
+                                    .w(px(84.0))
+                                    .flex_shrink_0()
+                                    .whitespace_normal()
+                                    .child(description),
+                            )
+                    })),
             )
-            .child(
-                utility_button(
-                    "close-panel",
-                    "Close",
-                    &self.close_focus,
-                    window,
-                    cx.listener(|view, _, window, cx| view.close_panel(window, cx)),
-                )
-                .absolute()
-                .left(px(142.0))
-                .top(px(16.0))
-                .w(px(46.0))
-                .h(px(24.0)),
-            )
-            .child(body)
     }
 
     fn numeric_mouse_move(
@@ -1367,6 +1396,45 @@ impl GainSnapEditor {
         // sampling telemetry while the editor is open, even after silence.
         window.request_animation_frame();
     }
+}
+
+fn help_panel_surface() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |bounds, _, window, _| {
+            let left = f32::from(bounds.left()) + 0.5;
+            let top = f32::from(bounds.top()) + 0.5;
+            let right = f32::from(bounds.right()) - 0.5;
+            let bottom = f32::from(bounds.bottom()) - 0.5;
+            for stroke in [false, true] {
+                let mut path = if stroke {
+                    gpui::PathBuilder::stroke(px(1.0))
+                } else {
+                    gpui::PathBuilder::fill()
+                };
+                path.move_to(point(px(left + 6.0), px(top)));
+                path.line_to(point(px(right - 6.0), px(top)));
+                path.curve_to(point(px(right), px(top + 6.0)), point(px(right), px(top)));
+                path.line_to(point(px(right), px(bottom - 12.0)));
+                path.line_to(point(px(right - 12.0), px(bottom)));
+                path.line_to(point(px(left + 6.0), px(bottom)));
+                path.curve_to(
+                    point(px(left), px(bottom - 6.0)),
+                    point(px(left), px(bottom)),
+                );
+                path.line_to(point(px(left), px(top + 6.0)));
+                path.curve_to(point(px(left + 6.0), px(top)), point(px(left), px(top)));
+                path.close();
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, rgba(if stroke { 0x4b514eff } else { 0x202323ff }));
+                }
+            }
+        },
+    )
+    .absolute()
+    .left(px(0.0))
+    .top(px(0.0))
+    .size_full()
 }
 
 fn utility_button(
@@ -1882,9 +1950,6 @@ impl Render for GainSnapEditor {
         #[cfg(target_os = "macos")]
         crate::host_space::install(window);
         self.tick(window, cx);
-        if self.panel.is_some() {
-            return self.render_panel(window, cx);
-        }
         let meter_bounds = Rc::clone(&self.meter_bounds);
         let target_db = self.controller.target_db();
         let output_peak_db = self.controller.output_peak_db;
@@ -2210,10 +2275,12 @@ impl Render for GainSnapEditor {
             cx.listener(|view, _, window, cx| view.open_panel(InfoPanel::Help, window, cx)),
         )
         .absolute()
-        .left(px(170.0))
-        .top(px(44.0))
-        .w(px(18.0))
-        .h(px(18.0));
+        .left(px(172.0))
+        .top(px(46.0))
+        .w(px(14.0))
+        .h(px(14.0))
+        .text_size(px(9.0))
+        .line_height(px(11.0));
         let gain_label = div()
             .absolute()
             .left(px(104.0))
@@ -2339,6 +2406,9 @@ impl Render for GainSnapEditor {
             .child(help)
             .child(gain_label)
             .child(drag_events)
+            .when(self.panel.is_some(), |element| {
+                element.child(self.render_panel(window, cx))
+            })
     }
 }
 
@@ -2991,7 +3061,7 @@ mod tests {
         assert_eq!(parse_target_text("-12 dBFS"), Some(-12.0));
         assert_eq!(parse_target_text("-12 dB"), Some(-12.0));
         assert_eq!(parse_target_text("8"), Some(0.0));
-        assert_eq!(parse_target_text("-80"), Some(-36.0));
+        assert_eq!(parse_target_text("-80"), Some(-60.0));
         assert_eq!(parse_target_text("--"), None);
     }
 
@@ -3019,7 +3089,7 @@ mod tests {
         assert!((target_level_fraction(-36.0) - 0.4).abs() < 0.0001);
         assert!((target_level_fraction(-12.0) - 0.8).abs() < 0.0001);
         assert_eq!(target_level_fraction(0.0), 1.0);
-        assert!((FULL_SCALE_RANGE.denormalize(0.4) - TARGET_RANGE.min).abs() < 0.0001);
+        assert!((FULL_SCALE_RANGE.denormalize(0.0) - TARGET_RANGE.min).abs() < 0.0001);
         assert_eq!(
             FULL_SCALE_RANGE.denormalize(0.0).max(TARGET_RANGE.min),
             TARGET_RANGE.min
@@ -3103,7 +3173,7 @@ mod tests {
             -11.6
         );
         assert_eq!(
-            snap_drag_db(-36.4, true, TARGET_MIN_DB, TARGET_MAX_DB),
+            snap_drag_db(-60.4, true, TARGET_MIN_DB, TARGET_MAX_DB),
             TARGET_MIN_DB
         );
         assert_eq!(
@@ -3117,7 +3187,7 @@ mod tests {
         assert!((gain_marker_level_db(6.0) - (-10.5)).abs() < 0.001);
         for (gain_db, marker_db) in [
             (GAIN_MIN_DB, FULL_SCALE_RANGE.min),
-            (-18.0, -36.0),
+            (-30.0, -36.0),
             (0.0, GAIN_MARKER_NEUTRAL_DB),
             (18.0, -7.5),
             (GAIN_MARKER_HIGH_DB, GAIN_MARKER_HIGH_LEVEL_DB),

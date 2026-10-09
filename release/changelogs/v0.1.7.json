@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "version": "0.1.7",
+  "source_head": "9817cd8ea7bcf17e03a368be0b53be5a4f20ac4c",
+  "base_tag": "v0.1.6",
+  "base_commit": "d587f7707e42b91b739957a18c35df668619362f",
+  "entries": [
+    {
+      "category": "feature",
+      "description": "Replaced the preset list with a Normalize toggle: click N to start Peak matching at 0 dBFS, then click again to stop and hold the audible gain.",
+      "commits": [
+        "2255938a6ba669c23bcae8daac5e6ab5f4e44014"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "New instances remember your last Peak/RMS selection across DAW restarts. Saved projects keep their own mode.",
+      "commits": [
+        "2255938a6ba669c23bcae8daac5e6ab5f4e44014"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Match now waits at least one second for repeated signal and a stable measurement before adjusting, preventing boosts from isolated hits followed by silence.",
+      "commits": [
+        "2255938a6ba669c23bcae8daac5e6ab5f4e44014"
+      ]
+    },
+    {
+      "category": "improvement",
+      "description": "Automatic gain changes are limited to 24 dB per second in either direction for smoother matching.",
+      "commits": [
+        "2255938a6ba669c23bcae8daac5e6ab5f4e44014"
+      ]
+    },
+    {
+      "category": "fix",
+      "description": "Stopping Match during a correction now holds the gain you are currently hearing.",
+      "commits": [
+        "2255938a6ba669c23bcae8daac5e6ab5f4e44014"
+      ]
+    }
+  ]
+}

@@ -90,7 +90,11 @@ impl IEditControllerTrait for GainSnapVst3Controller {
         copy_wstring(meta.short_title, &mut info.shortTitle);
         copy_wstring(meta.units, &mut info.units);
         info.stepCount = meta.step_count;
-        info.defaultNormalizedValue = meta.default_normalized;
+        info.defaultNormalizedValue = if meta.id == crate::params::PARAM_RMS_MODE.get() {
+            f64::from(self.shared().params.initial_rms_mode())
+        } else {
+            meta.default_normalized
+        };
         info.unitId = 0;
         info.flags = if meta.automatable {
             ParameterInfo_::ParameterFlags_::kCanAutomate

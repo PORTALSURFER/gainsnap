@@ -974,32 +974,40 @@ mod macos {
         assert_eq!(params.restart_generation(), generation + 2);
         assert!(params.match_requested(), "rematch keeps Match enabled");
         pump_appkit(app, &gui, 0.12);
-        // Presets preserve mode and Match, with targets suited to +12 dB on the main bus.
-        let match_before_preset = params.match_requested();
-        for (rms, targets) in [
-            (false, [-12.0, -14.0, -16.0, -18.0, -20.0, -22.0, -12.0]),
-            (true, [-24.0, -18.0, -22.0, -26.0, -24.0, -28.0, -24.0]),
-        ] {
+        // Normalize switches either starting mode to Peak at 0 dBFS.
+        for rms in [false, true] {
             params.set_param(toybox::clack_plugin::utils::ClapId::new(4), f32::from(rms));
-            for (index, target) in targets.into_iter().enumerate() {
-                send_click(fixture.window, 144.0, 258.0);
-                pump_appkit(app, &gui, 0.04);
-                if index == 0 {
-                    let (w, h, pixels) = gui.capture_rgba().expect("preset panel");
-                    write_capture(
-                        &output_root(),
-                        if rms { "presets-rms" } else { "presets" },
-                        w,
-                        h,
-                        pixels,
-                    );
-                }
-                send_click(fixture.window, 85.0, 103.0 + index as f64 * 36.0);
-                pump_appkit(app, &gui, 0.04);
-                assert_eq!(params.rms_mode(), rms, "preset {index} preserves mode");
-                assert_eq!(params.target_db(), target, "preset {index} target");
-                assert_eq!(params.match_requested(), match_before_preset);
-            }
+            params.set_param(toybox::clack_plugin::utils::ClapId::new(2), 0.0);
+            send_click(fixture.window, 19.0, 388.0);
+            pump_appkit(app, &gui, 0.04);
+            assert!(!params.rms_mode(), "Normalize selects Peak");
+            assert_eq!(params.target_db(), 0.0);
+            assert!(params.match_requested(), "Normalize starts Match");
+            let restart_before = params.restart_generation();
+            send_click(fixture.window, 19.0, 388.0);
+            pump_appkit(app, &gui, 0.04);
+            assert!(
+                !params.match_requested(),
+                "Normalize stops Match on second click"
+            );
+            assert_eq!(params.restart_generation(), restart_before);
+            assert!(!params.rms_mode());
+            assert_eq!(params.target_db(), 0.0);
+            send_click(fixture.window, 19.0, 388.0);
+            pump_appkit(app, &gui, 0.04);
+            assert!(params.match_requested(), "Normalize starts Match again");
+            let (w, h, pixels) = gui.capture_rgba().expect("Normalize capture");
+            write_capture(
+                &output_root(),
+                if rms {
+                    "normalize-from-rms"
+                } else {
+                    "normalize-from-peak"
+                },
+                w,
+                h,
+                pixels,
+            );
         }
 
         send_click(fixture.window, 179.0, 53.0);

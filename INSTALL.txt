@@ -9,7 +9,11 @@ GainSnap — macOS Apple Silicon VST3
 4. Open your DAW and rescan VST3 plug-ins, then load GainSnap on an audio track.
 
 Choose Peak or RMS and set the target. Turn on Match to listen and adjust,
-then turn it off to hold the correction. Restart begins a new measurement.
+then turn it off to hold the audible correction. Match waits for repeated
+signal evidence and a stable measurement before adjusting smoothly.
+The bottom-left N button toggles Peak normalization at 0 dBFS.
+Restart begins a new measurement. Your last explicit Peak/RMS choice becomes
+the default for new instances; saved projects keep their own mode.
 Drag either triangle or the gain knob to adjust it. Drag the numeric fields
 vertically, or click and type a value. Shift gives finer numeric-field steps.
 Space passes through to the host transport.

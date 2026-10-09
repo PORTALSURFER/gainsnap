@@ -8,7 +8,7 @@ pub const GAIN_SMOOTHING_SECONDS: f32 = 0.01;
 /// Gain increases settle more slowly than reductions to avoid sudden boosts.
 pub const GAIN_INCREASE_SECONDS: f32 = 0.1;
 /// Observe this much audio after the first signal before applying a match.
-pub const MATCH_LISTEN_SECONDS: f32 = 0.3;
+pub const MATCH_LISTEN_SECONDS: f32 = 1.0;
 /// Smoothly blend the audible gain into the measured correction.
 pub const MATCH_TRANSITION_SECONDS: f32 = 0.3;
 /// Length of each full RMS measurement window.
@@ -19,6 +19,11 @@ pub const MAX_SUPPORTED_SAMPLE_RATE: f32 = 384_000.0;
 /// Peak below this threshold is treated as no usable signal.
 pub const SILENCE_PEAK_LINEAR: f32 = 1.0e-6;
 
+/// Initial evidence must remain within 0.5 dB for this long.
+const MATCH_CONFIDENCE_STABLE_SECONDS: f32 = 0.5;
+const MATCH_EVIDENCE_INTERVAL_SECONDS: f32 = 0.1;
+/// Bound automatic gain movement in both directions, including later corrections.
+const MATCH_SLEW_DB_PER_SECOND: f32 = 24.0;
 const MATCH_ACTIVITY_HOLD_SECONDS: f32 = 0.2;
 const MATCH_ADAPTATION_STABILITY_RATIO: f32 = 1.059_253_7;
 const MATCH_ACTIVITY_MEANINGFUL_GAIN_RATIO: f32 = 1.001_151_3;
@@ -153,6 +158,13 @@ pub struct GainSnapEngine {
     gain_increase_coefficient: f64,
     startup_window_frames: u64,
     startup_observed_frames: u64,
+    confidence_stable_frames: u64,
+    confidence_stable_limit: u64,
+    confidence_level: f32,
+    evidence_interval_frames: u64,
+    evidence_since_observation: u64,
+    evidence_observations: u8,
+    match_slew_ratio: f64,
     match_transition_step: f32,
     match_transition_position: f32,
     match_start_gain: f32,
@@ -208,6 +220,16 @@ impl GainSnapEngine {
             gain_increase_coefficient,
             startup_window_frames: (sample_rate * MATCH_LISTEN_SECONDS).ceil().max(1.0) as u64,
             startup_observed_frames: 0,
+            confidence_stable_frames: 0,
+            confidence_stable_limit: (sample_rate * MATCH_CONFIDENCE_STABLE_SECONDS).ceil() as u64,
+            confidence_level: 0.0,
+            evidence_interval_frames: (sample_rate * MATCH_EVIDENCE_INTERVAL_SECONDS)
+                .ceil()
+                .max(1.0) as u64,
+            evidence_since_observation: 0,
+            evidence_observations: 0,
+            match_slew_ratio: 10.0_f64
+                .powf(MATCH_SLEW_DB_PER_SECOND as f64 / (20.0 * sample_rate as f64)),
             match_transition_step: 1.0 / (sample_rate * MATCH_TRANSITION_SECONDS),
             match_transition_position: 1.0,
             match_start_gain: gain,
@@ -257,6 +279,10 @@ impl GainSnapEngine {
         self.target_gain = self.current_gain;
         self.measurement_gain_linear = self.current_gain as f32;
         self.startup_observed_frames = 0;
+        self.confidence_stable_frames = 0;
+        self.confidence_level = 0.0;
+        self.evidence_since_observation = 0;
+        self.evidence_observations = 0;
         self.match_transition_position = 1.0;
         self.match_start_gain = self.current_gain as f32;
         self.last_output_gain = self.current_gain as f32;
@@ -276,7 +302,12 @@ impl GainSnapEngine {
         self.restart_generation = restart_generation;
         if !request {
             if self.previous_match_request && self.state == MatchState::Measuring {
+                let externally_changed =
+                    (params.locked_gain_db() - self.locked_gain_db).abs() > 0.0001;
                 self.finish_measurement();
+                if !externally_changed {
+                    params.set_param(crate::params::PARAM_LOCKED_GAIN_DB, self.locked_gain_db);
+                }
             }
             self.previous_match_request = false;
         } else if !self.previous_match_request || mode_changed {
@@ -317,6 +348,10 @@ impl GainSnapEngine {
 
     fn start_new_measurement(&mut self) {
         self.startup_observed_frames = 0;
+        self.confidence_stable_frames = 0;
+        self.confidence_level = 0.0;
+        self.evidence_since_observation = 0;
+        self.evidence_observations = 0;
         self.measurement_rms_mode = self.rms_mode;
         self.input_rms.reset();
         self.rms_frames = 0;
@@ -396,14 +431,30 @@ impl GainSnapEngine {
         params: &GainSnapParams,
         first_complete_rms: bool,
     ) {
-        if self.startup_observed_frames < self.startup_window_frames
-            || (self.measurement_rms_mode && !self.input_rms.complete())
-        {
+        if self.measurement_rms_mode && !self.input_rms.complete() {
             return;
         }
         let level = self.measurement_candidate_level();
         if level <= SILENCE_PEAK_LINEAR {
             return;
+        }
+        if self.force_measurement_update {
+            // Count signal observations separated in time; a lone transient
+            // followed by silence must never authorize a large automatic boost.
+            if self.confidence_level <= SILENCE_PEAK_LINEAR
+                || level > self.confidence_level * MATCH_ADAPTATION_STABILITY_RATIO
+            {
+                self.confidence_level = level;
+                self.confidence_stable_frames = 0;
+            }
+            self.confidence_stable_frames = self.confidence_stable_frames.saturating_add(1);
+            if self.startup_observed_frames < self.startup_window_frames
+                || self.confidence_stable_frames < self.confidence_stable_limit
+                || self.evidence_observations < 3
+                || self.activity_silence_frames >= self.confidence_stable_limit
+            {
+                return;
+            }
         }
         let candidate_gain = self.gain_for_measurement(level);
         if !candidate_gain.is_finite() || candidate_gain <= 0.0 {
@@ -456,7 +507,15 @@ impl GainSnapEngine {
         if self.state == MatchState::Measuring {
             self.activity_adjustment_hold_frames =
                 self.activity_adjustment_hold_frames.saturating_sub(1);
+            self.evidence_since_observation = self.evidence_since_observation.saturating_add(1);
             if input_peak > SILENCE_PEAK_LINEAR {
+                if self.evidence_observations == 0
+                    || self.evidence_since_observation >= self.evidence_interval_frames
+                {
+                    self.evidence_observations =
+                        self.evidence_observations.saturating_add(1).min(3);
+                    self.evidence_since_observation = 0;
+                }
                 self.activity_silence_frames = 0;
             } else {
                 self.activity_silence_frames = self.activity_silence_frames.saturating_add(1);
@@ -517,6 +576,14 @@ impl GainSnapEngine {
             self.match_transition_position = (position + self.match_transition_step).min(1.0);
         }
         let desired_gain = self.match_start_gain * (1.0 - blend) + self.current_gain as f32 * blend;
+        let desired_gain = if self.state == MatchState::Measuring {
+            (desired_gain as f64).clamp(
+                self.last_output_gain as f64 / self.match_slew_ratio,
+                self.last_output_gain as f64 * self.match_slew_ratio,
+            )
+        } else {
+            desired_gain as f64
+        };
         // 0 dBFS is a reference level, not a floating-point output ceiling.
         // Only prevent numeric overflow near f32::MAX, preserving stereo ratio.
         // Multiplication in f64 avoids overflow before conversion to the host's f32.
@@ -525,7 +592,7 @@ impl GainSnapEngine {
         } else {
             f64::MAX
         };
-        let applied_gain = (desired_gain as f64).min(numeric_max_gain);
+        let applied_gain = desired_gain.min(numeric_max_gain);
         self.last_output_gain = applied_gain as f32;
         let output_left = (input_left as f64 * applied_gain) as f32;
         let output_right = (input_right as f64 * applied_gain) as f32;
@@ -582,8 +649,8 @@ impl GainSnapEngine {
                     };
                 }
 
-                let gain_slewing = (self.target_gain - self.current_gain).abs()
-                    > self.target_gain.max(self.current_gain).max(1.0) * 0.001;
+                let gain_slewing = (self.target_gain - self.last_output_gain as f64).abs()
+                    > self.target_gain.max(self.last_output_gain as f64) * 0.001;
                 let transition_active = self.match_transition_position < 1.0
                     || self.activity_adjustment_hold_frames > 0;
                 if gain_slewing || transition_active {
@@ -598,6 +665,12 @@ impl GainSnapEngine {
     }
 
     fn finish_measurement(&mut self) {
+        // Stop at the audible correction, including halfway through a slew.
+        self.current_gain = self.last_output_gain as f64;
+        self.target_gain = self.current_gain;
+        self.match_start_gain = self.last_output_gain;
+        self.match_transition_position = 1.0;
+        self.locked_gain_db = sanitize_gain_db(20.0 * self.last_output_gain.log10());
         if self.measurement_level <= SILENCE_PEAK_LINEAR {
             self.match_transition_position = 1.0;
             self.state = if self.session_peak > SILENCE_PEAK_LINEAR {
@@ -678,6 +751,85 @@ mod tests {
     }
 
     #[test]
+    fn quiet_lead_in_and_unsettled_levels_do_not_authorize_a_boost() {
+        for rms in [false, true] {
+            let params = rms_params();
+            params.set_param(crate::params::PARAM_RMS_MODE, f32::from(rms));
+            params.set_param(PARAM_TARGET_DB, 0.0);
+            let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+            engine.begin_block(&params);
+            for _ in 0..900 {
+                assert_eq!(
+                    engine.process_frame(&params, 0.001, -0.0005),
+                    (0.001, -0.0005)
+                );
+            }
+            for _ in 0..499 {
+                assert_eq!(engine.process_frame(&params, 0.5, -0.25), (0.5, -0.25));
+                assert_eq!(params.locked_gain_db(), 0.0);
+            }
+            run_frames(&mut engine, &params, 0.5, 2_000);
+            assert!((engine.report().applied_gain_db - 6.0206).abs() < 0.01);
+        }
+        let params = peak_params();
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+        engine.begin_block(&params);
+        for frame in 0..3_000 {
+            let sample = 0.001 * 2.0_f32.powf(frame as f32 / 300.0);
+            assert_eq!(
+                engine.process_frame(&params, sample, -sample),
+                (sample, -sample)
+            );
+            assert_eq!(params.locked_gain_db(), 0.0);
+        }
+    }
+
+    #[test]
+    fn isolated_peak_and_silence_never_establish_confidence() {
+        let params = peak_params();
+        params.set_param(PARAM_TARGET_DB, 0.0);
+        params.set_param(PARAM_MATCH, 1.0);
+        let mut engine = GainSnapEngine::new(1_000.0, 0.0);
+        engine.begin_block(&params);
+        engine.process_frame(&params, 0.001, -0.001);
+        run_frames(&mut engine, &params, 0.0, 10_000);
+        assert_eq!(params.locked_gain_db(), 0.0);
+        assert_eq!(engine.report().applied_gain_db, 0.0);
+        assert_eq!(engine.report().activity, MatchActivity::Listening);
+    }
+
+    #[test]
+    fn automatic_gain_slew_is_bounded_and_stopping_holds_the_audible_gain() {
+        for rate in [1_000.0, 44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let params = peak_params();
+            params.set_param(PARAM_TARGET_DB, 0.0);
+            params.set_param(PARAM_MATCH, 1.0);
+            let mut engine = GainSnapEngine::new(rate, 0.0);
+            engine.begin_block(&params);
+            let mut previous_db = 0.0;
+            for frame in 0..(rate * 3.0) as usize {
+                let input = if frame < (rate * 2.0) as usize {
+                    0.0001
+                } else {
+                    0.5
+                };
+                let (left, right) = engine.process_frame(&params, input, -input * 0.5);
+                assert_eq!(right, -left * 0.5);
+                let db = 20.0 * (left / input).log10();
+                assert!((db - previous_db).abs() <= MATCH_SLEW_DB_PER_SECOND / rate + 0.00003);
+                previous_db = db;
+            }
+            let before = engine.process_frame(&params, 0.5, -0.25);
+            let audible = engine.report().applied_gain_db;
+            params.set_param(PARAM_MATCH, 0.0);
+            engine.sync_controls(&params);
+            assert_eq!(engine.process_frame(&params, 0.5, -0.25), before);
+            assert!((params.locked_gain_db() - audible).abs() < 0.0001);
+        }
+    }
+
+    #[test]
     fn manual_gain_is_fixed_across_louder_input_and_auto_can_resume() {
         let params = peak_params();
         params.set_param(crate::params::PARAM_MANUAL_GAIN_DB, 6.0);
@@ -710,14 +862,14 @@ mod tests {
     }
 
     #[test]
-    fn one_peak_stays_confident_through_ten_minutes_of_silence() {
+    fn established_measurement_stays_confident_through_ten_minutes_of_silence() {
         for rms in [false, true] {
             let params = peak_params();
             params.set_param(crate::params::PARAM_RMS_MODE, f32::from(rms));
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(1_000.0, 0.0);
             engine.begin_block(&params);
-            engine.process_frame(&params, 0.5, -0.25);
+            run_frames(&mut engine, &params, 0.5, 2_000);
             run_frames(&mut engine, &params, 0.0, 2_000);
             let gain = params.locked_gain_db();
             let activity = engine.report().activity;
@@ -736,7 +888,7 @@ mod tests {
             assert_eq!(params.locked_gain_db(), gain);
             assert_eq!(engine.report().activity, activity);
             // A newly higher peak remains actionable in the same session.
-            engine.process_frame(&params, 0.9, -0.45);
+            run_frames(&mut engine, &params, 0.9, 600);
             run_frames(&mut engine, &params, 0.0, 2_000);
             assert_eq!(engine.session_peak, 0.9);
             assert!(params.locked_gain_db() < gain);
@@ -780,7 +932,7 @@ mod tests {
         engine.begin_block(&params);
         assert_eq!(engine.report().activity, MatchActivity::Listening);
 
-        run_frames(&mut engine, &params, 0.5, 299);
+        run_frames(&mut engine, &params, 0.5, 999);
         assert_eq!(engine.report().activity, MatchActivity::Listening);
         engine.process_frame(&params, 0.5, 0.5);
         assert_eq!(engine.report().activity, MatchActivity::Adjusting);
@@ -1254,14 +1406,14 @@ mod tests {
         let mut engine = GainSnapEngine::new(sample_rate as f32, 0.0);
         engine.begin_block(&params);
         let beat_frames = sample_rate * 60 / bpm;
-        let release_at = beat_frames * 4 + (beat_frames as f32 * release_phase) as usize;
+        let release_at = beat_frames * 8 + (beat_frames as f32 * release_phase) as usize;
         let mut output_peak = 0.0_f32;
         let mut strongest_output_rms_db = -120.0_f32;
         for frame in 0..=release_at {
             let input = damped_kick(frame, sample_rate, bpm);
             let output = engine.process_frame(&params, input, -input * 0.7);
             assert!(output.0.is_finite() && output.1.is_finite());
-            if frame >= beat_frames * 2 {
+            if frame >= beat_frames * 6 {
                 output_peak = output_peak.max(output.0.abs()).max(output.1.abs());
                 strongest_output_rms_db =
                     strongest_output_rms_db.max(engine.report().output_rms_db);
@@ -1365,10 +1517,12 @@ mod tests {
         }
         assert!(engine.input_rms.complete());
         assert!(engine.session_rms > SILENCE_PEAK_LINEAR);
-        assert!(
-            engine.locked_gain_db > -5.0,
-            "the first complete RMS window should publish after the impulse"
+        assert_eq!(
+            engine.locked_gain_db, 0.0,
+            "one shot is insufficient confidence"
         );
+        run_frames(&mut engine, &params, 0.0, 96_000);
+        assert_eq!(params.locked_gain_db(), 0.0);
 
         let early_params = rms_params();
         let mut early = GainSnapEngine::new(48_000.0, 0.0);
@@ -1501,7 +1655,7 @@ mod tests {
         params.set_param(PARAM_MATCH, 1.0);
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.5, 1_200);
+        run_frames(&mut engine, &params, 0.5, 2_000);
 
         assert_eq!(engine.report().state, MatchState::Measuring);
         assert_eq!(engine.report().progress, 0.0);
@@ -1536,7 +1690,7 @@ mod tests {
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         params.set_param(PARAM_MATCH, 1.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.25, 500);
+        run_frames(&mut engine, &params, 0.25, 2_000);
         assert_eq!(engine.report().state, MatchState::Measuring);
         assert!((engine.report().locked_gain_db - 0.0412).abs() < 0.02);
 
@@ -1597,7 +1751,7 @@ mod tests {
         engine.begin_block(&params);
 
         let input_peak = 10.0_f32.powf(-119.0 / 20.0);
-        run_frames(&mut engine, &params, input_peak, 4_000);
+        run_frames(&mut engine, &params, input_peak, 7_000);
 
         assert!((engine.report().locked_gain_db - 119.0).abs() < 0.02);
         assert!(engine.report().output_peak_db.abs() < 0.01);
@@ -1640,14 +1794,14 @@ mod tests {
 
         params.set_param(PARAM_MATCH, 1.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.5, 1_000);
+        run_frames(&mut engine, &params, 0.5, 2_000);
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
         assert_eq!(engine.report().state, MatchState::Locked);
 
         params.set_param(PARAM_MATCH, 1.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.25, 1_000);
+        run_frames(&mut engine, &params, 0.25, 2_000);
         assert_eq!(engine.report().state, MatchState::Measuring);
         params.set_param(PARAM_MATCH, 0.0);
         engine.begin_block(&params);
@@ -1670,7 +1824,7 @@ mod tests {
         // to the next processing block.
         params.set_param(PARAM_TARGET_DB, 0.0);
         engine.begin_block(&params);
-        run_frames(&mut engine, &params, 0.25, 1_200);
+        run_frames(&mut engine, &params, 0.25, 2_000);
 
         engine.begin_block(&params);
         run_frames(&mut engine, &params, 0.25, 64);
@@ -1722,7 +1876,7 @@ mod tests {
         let first = engine.process_frame(&params, 0.5, 0.25).0;
         assert_eq!(first, 0.5);
         let mut previous = first;
-        for _ in 0..48_000 {
+        for _ in 0..96_000 {
             let (left, right) = engine.process_frame(&params, 0.5, 0.25);
             assert!(left <= previous + 1.0e-6);
             assert_eq!(right, left * 0.5);
@@ -1794,7 +1948,7 @@ mod tests {
             params.set_param(PARAM_MATCH, 1.0);
             let mut engine = GainSnapEngine::new(48_000.0, 0.0);
             engine.begin_block(&params);
-            run_frames(&mut engine, &params, 0.0001, 96_000);
+            run_frames(&mut engine, &params, 0.0001, 240_000);
             let held_gain = db_to_linear(params.locked_gain_db());
             let (left, right) = engine.process_frame(&params, 1.0, -0.5);
             assert!(
@@ -1884,7 +2038,7 @@ mod tests {
             engine.sync_controls(&params);
             let mut previous = engine.process_frame(&params, 0.5, -0.25).0;
             assert!((previous - before).abs() < 1.0e-6);
-            for _ in 0..48_000 {
+            for _ in 0..144_000 {
                 let (left, right) = engine.process_frame(&params, 0.5, -0.25);
                 assert!(left > 0.0);
                 assert!(left <= previous + 1.0e-6);
@@ -1912,7 +2066,7 @@ mod tests {
                 let first = engine.process_frame(&params, 0.5, -0.25).0;
                 assert!((first - previous).abs() < 1.0e-6);
                 let mut quietest = first;
-                for _ in 0..(sample_rate * 1.5) as usize {
+                for _ in 0..(sample_rate * 3.0) as usize {
                     let (left, right) = engine.process_frame(&params, 0.5, -0.25);
                     assert!(
                         (left - previous).abs() < 0.002,

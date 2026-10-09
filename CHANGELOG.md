@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Hold automatic matching until repeated signal evidence and a stable measurement
+  establish confidence; isolated hits and silent preroll cannot trigger a boost.
+  Bound matching gain changes to 24 dB per second and hold the audible gain when
+  matching stops midway through a correction.
+
+- Replace the preset list with a compact Normalize toggle left of the bottom
+  target field. Enabling it selects Peak, sets the target to 0 dBFS, and starts
+  Match; clicking again stops matching and holds the gain.
+
+- Remember the last explicitly chosen Peak/RMS mode for new instances across
+  DAW relaunches, while preserving each saved project's mode.
+
+## 0.1.6
+
 - Pass signals above 0 dBFS without sample-peak limiting, preserving transients
   and avoiding abrupt limiter attenuation. RMS matching no longer caps gain by
   sample-peak headroom; its +24 dB boost limit remains.

@@ -388,64 +388,8 @@ impl DisplaySnapshot {
 
 #[derive(Clone, Copy, PartialEq)]
 enum InfoPanel {
-    Presets,
     Help,
 }
-
-#[derive(Clone, Copy)]
-struct TargetPreset {
-    label: &'static str,
-    peak_db: f32,
-    rms_db: f32,
-}
-
-impl TargetPreset {
-    fn target_db(self, rms: bool) -> f32 {
-        if rms {
-            self.rms_db
-        } else {
-            self.peak_db
-        }
-    }
-}
-
-const TECHNO_PRESETS: [TargetPreset; 7] = [
-    TargetPreset {
-        label: "Kick",
-        peak_db: -12.0,
-        rms_db: -24.0,
-    },
-    TargetPreset {
-        label: "Sub",
-        peak_db: -14.0,
-        rms_db: -18.0,
-    },
-    TargetPreset {
-        label: "Tom / Mid-bass",
-        peak_db: -16.0,
-        rms_db: -22.0,
-    },
-    TargetPreset {
-        label: "Percs",
-        peak_db: -18.0,
-        rms_db: -26.0,
-    },
-    TargetPreset {
-        label: "Textures / Synths",
-        peak_db: -20.0,
-        rms_db: -24.0,
-    },
-    TargetPreset {
-        label: "Effects",
-        peak_db: -22.0,
-        rms_db: -28.0,
-    },
-    TargetPreset {
-        label: "Normalize",
-        peak_db: -12.0,
-        rms_db: -24.0,
-    },
-];
 
 struct ControlHint(&'static str);
 impl Render for ControlHint {
@@ -481,6 +425,7 @@ struct EditorController {
     meter_last_update: Instant,
     pulse_started: Option<Instant>,
     pulse_alpha: u8,
+    remember_mode_choices: bool,
 }
 
 impl EditorController {
@@ -505,6 +450,7 @@ impl EditorController {
             params,
             automation_queue,
             automation_config: AutomationConfig::default(),
+            remember_mode_choices: false,
             status,
             param_requester,
             edit_sink,
@@ -763,9 +709,8 @@ pub(crate) struct GainSnapEditor {
     numeric_drag: Option<(bool, Point<Pixels>, f32, bool)>,
     panel: Option<InfoPanel>,
     help_focus: FocusHandle,
-    preset_focus: FocusHandle,
+    normalize_focus: FocusHandle,
     close_focus: FocusHandle,
-    preset_row_focus: [FocusHandle; TECHNO_PRESETS.len()],
     applied_gain_previous: f32,
     gain_direction: i8,
     gain_direction_until: Instant,
@@ -889,9 +834,8 @@ impl GainSnapEditor {
             numeric_drag: None,
             panel: None,
             help_focus: cx.focus_handle(),
-            preset_focus: cx.focus_handle(),
+            normalize_focus: cx.focus_handle(),
             close_focus: cx.focus_handle(),
-            preset_row_focus: std::array::from_fn(|_| cx.focus_handle()),
             applied_gain_previous,
             gain_direction: 0,
             gain_direction_until: Instant::now(),
@@ -955,7 +899,7 @@ impl GainSnapEditor {
             return;
         }
         let button_focused = self.help_focus.is_focused(window)
-            || self.preset_focus.is_focused(window)
+            || self.normalize_focus.is_focused(window)
             || self.peak_focus_handle.is_focused(window)
             || self.rms_focus_handle.is_focused(window)
             || self.match_focus_handle.is_focused(window)
@@ -1230,25 +1174,24 @@ impl GainSnapEditor {
     }
 
     fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = self.panel.take();
-        window.focus(
-            if panel == Some(InfoPanel::Presets) {
-                &self.preset_focus
-            } else {
-                &self.help_focus
-            },
-            cx,
-        );
+        self.panel = None;
+        window.focus(&self.help_focus, cx);
         cx.notify();
     }
 
-    fn apply_preset(&mut self, preset: TargetPreset, window: &mut Window, cx: &mut Context<Self>) {
-        self.controller
-            .set_target_db(preset.target_db(self.controller.params.rms_mode()));
-        self.target_input
-            .update(cx, |input, cx| input.set_editing(false, cx));
-        self.set_target_text_force(self.controller.target_text(), cx);
-        self.close_panel(window, cx);
+    fn normalize(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.controller.params.match_requested() {
+            self.controller.toggle_value(PARAM_MATCH, false);
+        } else {
+            self.controller.toggle_value(PARAM_RMS_MODE, false);
+            self.remember_mode_choice(false);
+            self.controller.set_target_db(0.0);
+            self.target_input
+                .update(cx, |input, cx| input.set_editing(false, cx));
+            self.set_target_text_force(self.controller.target_text(), cx);
+            self.controller.toggle_value(PARAM_MATCH, true);
+        }
+        cx.notify();
     }
 
     fn render_panel(
@@ -1256,7 +1199,6 @@ impl GainSnapEditor {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let panel = self.panel.unwrap();
         let mut body = div()
             .absolute()
             .left(px(12.0))
@@ -1265,49 +1207,9 @@ impl GainSnapEditor {
             .flex()
             .flex_col()
             .gap(px(10.0));
-        if panel == InfoPanel::Presets {
-            let rms = self.controller.params.rms_mode();
-            body = body.gap(px(6.0)).child(
-                div()
-                    .text_size(px(10.0))
-                    .line_height(px(14.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child(if rms {
-                        "RMS targets in dBFS. +12 dB on the main bus."
-                    } else {
-                        "Peak targets in dBFS. +12 dB on the main bus."
-                    }),
-            );
-            for (index, preset) in TECHNO_PRESETS.iter().copied().enumerate() {
-                body = body.child(
-                    utility_button(
-                        ("preset-row", index),
-                        format!(
-                            "{} · {}",
-                            preset.label,
-                            format_meter_readout(preset.target_db(rms))
-                        ),
-                        &self.preset_row_focus[index],
-                        window,
-                        cx.listener(move |view, _, window, cx| {
-                            view.apply_preset(preset, window, cx)
-                        }),
-                    )
-                    .w(px(176.0))
-                    .h(px(30.0)),
-                );
-            }
-            body = body.child(
-                div()
-                    .text_size(px(10.0))
-                    .line_height(px(14.0))
-                    .text_color(solid(TEXT_MUTED))
-                    .child("Select, then enable Match. Active Match follows the new target."),
-            );
-        } else {
-            for (heading, text) in [
+        for (heading, text) in [
                 ("Peak / RMS", "Peak: transients. RMS: strongest 300 ms window, not LUFS."),
-                ("Match / Restart", "Match listens, then adjusts. Turn off to hold gain. Restart measures again."),
+                ("Match / Normalize", "Normalize toggles Peak Match at 0 dBFS. Restart measures again."),
                 ("Target / Gain", "Left: target dBFS. Right: gain dB, on its own scale."),
                 ("Applied / Shortfall", "Applied includes gain smoothing. Shortfall: the gain range blocks the RMS target."),
                 ("Shortcuts", "Drag or type numbers. Shift: finer steps. Double-click: gain 0, target −12. Enter: confirm. Space: DAW transport."),
@@ -1316,7 +1218,7 @@ impl GainSnapEditor {
                     .child(div().text_size(px(11.0)).text_color(solid(TEXT_PRIMARY)).child(heading))
                     .child(div().text_size(px(10.0)).line_height(px(13.0)).text_color(solid(TEXT_MUTED)).child(text)));
             }
-        }
+
         div()
             .id("info-panel")
             .relative()
@@ -1332,11 +1234,7 @@ impl GainSnapEditor {
                     .left(px(12.0))
                     .top(px(20.0))
                     .text_size(px(13.0))
-                    .child(if panel == InfoPanel::Presets {
-                        "PRESETS"
-                    } else {
-                        "HELP"
-                    }),
+                    .child("HELP"),
             )
             .child(
                 utility_button(
@@ -1398,6 +1296,14 @@ impl GainSnapEditor {
         self.numeric_drag = None;
     }
 
+    fn remember_mode_choice(&self, rms: bool) {
+        // Standalone screenshot fixtures have no host endpoints and must not
+        // alter the user's preferences while exercising their controls.
+        if self.controller.remember_mode_choices {
+            crate::preferences::remember_rms_mode(rms);
+        }
+    }
+
     fn select_peak_mode(
         &mut self,
         event: &gpui::ClickEvent,
@@ -1408,6 +1314,7 @@ impl GainSnapEditor {
             return;
         }
         self.controller.toggle_value(PARAM_RMS_MODE, false);
+        self.remember_mode_choice(false);
         cx.notify();
     }
 
@@ -1421,6 +1328,7 @@ impl GainSnapEditor {
             return;
         }
         self.controller.toggle_value(PARAM_RMS_MODE, true);
+        self.remember_mode_choice(true);
         cx.notify();
     }
 
@@ -2318,18 +2226,37 @@ impl Render for GainSnapEditor {
             .tooltip(|_, cx| cx.new(|_| ControlHint("RMS shortfall uses the retained measurement, not the quieter current beat. The gain range limits correction. Peaks above 0 dBFS pass through to the host.")).into())
             .child(format!("{shortfall:.1} dB SHORT"))
             .child(div().text_color(solid(TEXT_MUTED)).child("GAIN LIMIT"));
-        let presets = utility_button(
-            "presets",
-            "Presets",
-            &self.preset_focus,
+        let normalize = utility_button(
+            "normalize",
+            "N",
+            &self.normalize_focus,
             window,
-            cx.listener(|view, _, window, cx| view.open_panel(InfoPanel::Presets, window, cx)),
+            cx.listener(Self::normalize),
         )
         .absolute()
-        .left(px(112.0))
-        .top(px(246.0))
-        .w(px(64.0))
-        .h(px(24.0));
+        .left(px(8.0))
+        .top(px(MATCH_TOP))
+        .w(px(22.0))
+        .h(px(MATCH_HEIGHT))
+        .aria_label("Normalize: toggle Peak matching at 0 dBFS")
+        .tooltip(|_, cx| {
+            cx.new(|_| ControlHint("Normalize: toggle Peak matching at 0 dBFS."))
+                .into()
+        })
+        .when(
+            match_requested
+                && !self.controller.params.rms_mode()
+                && self.controller.params.target_db() == 0.0,
+            |element| {
+                element
+                    .bg(vertical_gradient_alpha(
+                        BUTTON_ACTIVE_TOP,
+                        BUTTON_ACTIVE_BOTTOM,
+                        pulse_alpha,
+                    ))
+                    .text_color(solid(0xffd3ac))
+            },
+        );
         let help = utility_button(
             "help",
             "?",
@@ -2464,7 +2391,7 @@ impl Render for GainSnapEditor {
                 match_activity == MatchActivity::BelowTarget && shortfall > 0.0,
                 |element| element.child(deficit),
             )
-            .child(presets)
+            .child(normalize)
             .child(help)
             .child(gain_label)
             .child(drag_events)
@@ -2919,6 +2846,7 @@ pub(crate) fn new_gui(
         status,
         param_requester,
         None,
+        true,
     )
 }
 
@@ -3041,6 +2969,7 @@ pub fn new_screenshot_gui_with_params(
         Arc::clone(&status),
         None,
         None,
+        false,
     );
     (gui, params, status)
 }
@@ -3060,6 +2989,7 @@ pub(crate) fn new_gui_with_edit_sink(
         status,
         None,
         Some(edit_sink),
+        true,
     )
 }
 
@@ -3070,14 +3000,16 @@ fn new_hosted_gui(
     status: Arc<GuiStatus>,
     param_requester: Option<HostParamRequester>,
     edit_sink: Option<Arc<dyn HostParamEditSink>>,
+    remember_mode_choices: bool,
 ) -> toybox::gpui_gui::GpuiHostedGui {
-    let controller = EditorController::new(
+    let mut controller = EditorController::new(
         Arc::clone(&params),
         Arc::clone(&automation_queue),
         Arc::clone(&status),
         param_requester,
         edit_sink,
     );
+    controller.remember_mode_choices = remember_mode_choices && !cfg!(test);
     let factory_controller = controller.clone();
     let visibility_controller = controller;
     toybox::gpui_gui::GpuiHostedGui::new(

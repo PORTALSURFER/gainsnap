@@ -166,6 +166,7 @@ pub struct GainSnapParams {
     target_db: AtomicF32,
     match_request: AtomicU32,
     rms_mode: AtomicU32,
+    initial_rms_mode: bool,
     locked_gain_db: AtomicF32,
     manual_gain_db: AtomicF32,
     manual_mode: AtomicU32,
@@ -181,10 +182,25 @@ impl Default for GainSnapParams {
 impl GainSnapParams {
     /// Construct parameters with GainSnap's conservative defaults.
     pub fn new() -> Self {
+        Self::new_with_mode(true)
+    }
+
+    /// Initial host-facing mode default, independent from state and automation.
+    pub fn initial_rms_mode(&self) -> bool {
+        self.initial_rms_mode
+    }
+
+    /// Construct a host instance using the remembered user default.
+    pub fn new_with_user_defaults() -> Self {
+        Self::new_with_mode(crate::preferences::default_rms_mode())
+    }
+
+    fn new_with_mode(rms: bool) -> Self {
         Self {
             target_db: AtomicF32::new(DEFAULT_TARGET_DB),
             match_request: AtomicU32::new(0),
-            rms_mode: AtomicU32::new(1),
+            rms_mode: AtomicU32::new(u32::from(rms)),
+            initial_rms_mode: rms,
             locked_gain_db: AtomicF32::new(DEFAULT_LOCKED_GAIN_DB),
             manual_gain_db: AtomicF32::new(0.0),
             manual_mode: AtomicU32::new(0),
@@ -286,8 +302,11 @@ pub const fn param_count() -> u32 {
 }
 
 /// Write metadata for a parameter index.
-pub fn write_param_info(index: u32, writer: &mut ParamInfoWriter) {
-    if let Some(def) = PARAM_DEFS.get(index as usize) {
+pub fn write_param_info(index: u32, writer: &mut ParamInfoWriter, rms_default: bool) {
+    if let Some(mut def) = PARAM_DEFS.get(index as usize).copied() {
+        if def.id == PARAM_RMS_MODE {
+            def.default = f64::from(rms_default);
+        }
         def.to_spec().write(writer);
     }
 }
@@ -509,6 +528,25 @@ impl AtomicF32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn restored_projects_override_the_instance_default_without_changing_it() {
+        for default in [false, true] {
+            let saved = GainSnapParams::new_with_mode(!default);
+            let snapshot = crate::state::decode_payload(
+                crate::state::STATE_VERSION,
+                &crate::state::encode_payload(&saved),
+            )
+            .unwrap();
+            let restored = GainSnapParams::new_with_mode(default);
+            assert_eq!(restored.rms_mode(), default);
+            crate::state::apply_snapshot(&restored, snapshot);
+            assert_eq!(restored.rms_mode(), !default);
+            assert_eq!(restored.initial_rms_mode(), default);
+            restored.set_param(PARAM_RMS_MODE, f32::from(default));
+            assert_eq!(restored.initial_rms_mode(), default);
+        }
+    }
+
     #[test]
     fn mode_has_a_new_stable_host_id_and_enumerated_values() {
         assert_eq!(PARAM_DEFS.map(|def| def.id.get()), [1, 2, 3, 4, 5, 6]);

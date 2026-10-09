@@ -138,7 +138,7 @@ impl GainSnapVst3Shared {
     /// Construct one unconnected VST3 endpoint's initial state.
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
-            params: Arc::new(GainSnapParams::new()),
+            params: Arc::new(GainSnapParams::new_with_user_defaults()),
             status: Arc::new(GuiStatus::default()),
         })
     }

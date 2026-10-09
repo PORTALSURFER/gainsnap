@@ -28,20 +28,29 @@ mode, target and gain; it does not start a new Match pass automatically.
 
 1. Choose **Peak** or **RMS** using the output readouts.
 2. Set a target using the left meter triangle or the number below the meter.
-   You can also choose a preset.
+   You can also use Normalize.
 3. Turn on **Match** and play the loudest relevant section of the track.
 4. Wait for the correction to settle, then turn Match off to hold that gain.
 
-Match listens for 300 ms after the first usable signal, then blends smoothly
-into the correction. RMS waits for a complete measurement window. Leave Match
+Match holds the current gain for at least one second and waits for repeated
+signal evidence and a measured level stable within 0.5 dB for half a second.
+An isolated hit followed by silence does not establish confidence. RMS also
+waits for a complete measurement window. Automatic gain changes slew at no
+more than 24 dB per second in either direction. Turning Match off holds the
+currently audible gain, even during a correction. Leave Match
 on while stronger passages play: newly stronger evidence can reduce the gain.
 Quiet passages and silence do not erase the session measurement or raise the
 correction. **Restart** begins a fresh measurement. Changing the target reuses
 retained evidence; switching Peak/RMS starts a new measurement.
 
-![GainSnap with an applied correction](assets/editor.png){width=200px}
+![GainSnap actively listening to incoming audio](assets/editor.png){width=200px}
 
 # Peak and RMS
+
+Your last explicit Peak/RMS selection becomes the default for new GainSnap
+instances, including after restarting your DAW. Saved projects restore each
+instance's own mode. Project loading and automation do not change your saved
+default. If no preference has been saved, new instances start in RMS.
 
 **Peak** uses the highest stereo sample peak encountered during the Match
 session. It links both channels to one gain, preserving their balance. Use it
@@ -57,26 +66,12 @@ Peak correction ranges from −36 to +120 dB. RMS correction retains a +24 dB
 boost cap. Signals at or below −120 dBFS are treated as silence. Gain range
 limits can prevent matching the selected target exactly.
 
-# Techno presets
+# Normalize
 
-These starting points assume a Utility adding +12 dB on the main bus. Peak
-presets target −12 dBFS or lower before that boost. Presets follow the selected
-Peak/RMS mode and preserve whether Match is on or off.
-
-| Preset | Peak target | RMS target |
-| --- | ---: | ---: |
-| Kick | −12 dBFS | −24 dBFS |
-| Sub | −14 dBFS | −18 dBFS |
-| Tom / Mid-bass | −16 dBFS | −22 dBFS |
-| Percs | −18 dBFS | −26 dBFS |
-| Textures / Synths | −20 dBFS | −24 dBFS |
-| Effects | −22 dBFS | −28 dBFS |
-| Normalize | −12 dBFS | −24 dBFS |
-
-RMS presets sit lower to leave room for transients. They match average level
-and do not impose a peak ceiling. Choose Peak when you want to match the
-highest observed sample. These are individual-track starting points; summing
-tracks can produce a higher main-bus level.
+The **N** button to the left of the bottom target field toggles Normalize.
+When matching is off, it selects Peak mode, sets the target to 0 dBFS, and starts
+Match. Clicking it while matching is active stops Match and holds the resulting
+gain. Peak also becomes the remembered mode for new instances.
 
 # Controls and feedback
 
@@ -107,7 +102,7 @@ target. The shortfall uses the retained measurement, not a quieter current beat.
 - Double-click a gain control to reset to 0 dB and stop Match. Double-click a
   target control to reset to −12 dBFS.
 - Space passes through to the DAW transport. Enter activates a focused button.
-- Open **?** for compact help. Escape closes Help or Presets.
+- Open **?** for compact help. Escape closes Help.
 
 # Floating-point headroom
 
@@ -126,8 +121,10 @@ output headroom. Reduce gain later in the chain when necessary.
 **The plug-in is missing:** confirm the VST3 folder, remove duplicate copies,
 restart your DAW and rescan. Use the Apple Silicon build on an Apple Silicon Mac.
 
-**Match keeps listening:** play usable audio long enough to fill the measurement
-window. Silence does not provide a new correction.
+**Match keeps listening:** play the loudest relevant section for at least one
+second, with repeated signal evidence and a stable measurement. A lone hit
+followed by silence does not provide enough confidence. Loop short material
+while matching if necessary.
 
 **The meter falls below the target between hits:** this is expected. GainSnap
 retains the strongest evidence rather than raising gain in quieter gaps.

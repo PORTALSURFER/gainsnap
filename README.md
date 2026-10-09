@@ -14,7 +14,8 @@ the meter, then click the adjacent Match icon; the smaller icon restarts matchin
 Shared host and GUI mechanics remain in Toybox.
 
 Click the Peak or RMS output readout to select the matching measurement. New
-instances default to RMS; saved projects retain their selected mode. RMS matching uses
+instances use the last explicitly selected Peak/RMS mode across DAW relaunches
+(RMS until a preference is saved); saved projects retain their own mode. RMS matching uses
 the strongest complete 300 ms sliding mean-square window of each channel and
 links gain to the louder channel, preserving stereo balance. The output meter
 shows the latest 300 ms sliding RMS window. The scale uses a full-scale square
@@ -33,16 +34,17 @@ RMS permits peaks above its average target and above 0 dBFS.
 Peak targets that would require more than −36 dB attenuation or +120 dB boost
 cannot be reached; peaks at or below −120 dBFS are treated as silence. RMS
 matching retains its +24 dB boost cap. The meter
-always shows the actual output. To normalize to 0 dBFS, select Peak,
-enter 0 as the target, and start Match.
+always shows the actual output. The bottom-left N button toggles Normalize:
+when matching is off, it selects Peak, sets 0 dBFS, and starts Match;
+clicking it again stops matching and holds the audible gain.
 
-Engaging Match holds the currently audible gain while listening for 300 ms
-from the first usable signal. It then blends smoothly into the measured gain
-for 300 ms, without dipping through silence or applying an initial provisional
-boost. RMS waits for a complete measurement window. Further stronger evidence
-fine-tunes the correction with 100 ms gain increases and 10 ms reductions.
-Restarts and target changes begin from the gain actually being heard. Turning
-Match off before the first measurement keeps the original gain.
+Engaging Match holds the audible gain for at least one second, requiring
+repeated signal evidence and a measurement stable within 0.5 dB for half a
+second before correcting. A lone hit followed by silence cannot trigger a
+boost. RMS also waits for a complete window. Automatic corrections change by
+at most 24 dB per second in either direction. Restarts and target changes begin
+from the gain actually heard. Stopping Match holds that audible gain, even
+midway through a correction.
 
 GainSnap applies smooth, linear gain without a sample-peak limiter or clipping
 at 0 dBFS. Louder transients can exceed the target while matching adapts;
@@ -55,7 +57,7 @@ When the target meter has keyboard focus, Up/Down (and Left/Right) change the
 target by 1.0 dB per step. Hold Shift for 0.1 dB steps. The numeric field below
 the meter accepts direct dBFS entry as well.
 
-The tall meter shows the output peak in orange and RMS in teal, with numeric
+The tall meter shows the output peak in orange and RMS in purple, with numeric
 readouts beside it. The left arrow and horizontal line set the target. Select
 Peak or RMS to choose which level Match uses. Drag the thick inner ring of the
 round gain control for coarse adjustments, even beyond the editor, or drag the

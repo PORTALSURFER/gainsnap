@@ -9,6 +9,7 @@
 mod clap_plugin;
 mod dsp;
 mod params;
+mod preferences;
 mod state;
 mod status;
 

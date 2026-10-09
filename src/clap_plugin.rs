@@ -119,7 +119,7 @@ impl DefaultPluginFactory for GainSnapPlugin {
 
     fn new_shared(_host: HostSharedHandle<'_>) -> Result<Self::Shared<'_>, PluginError> {
         Ok(GainSnapShared {
-            params: Arc::new(GainSnapParams::new()),
+            params: Arc::new(GainSnapParams::new_with_user_defaults()),
             status: Arc::new(GuiStatus::default()),
             automation_queue: Arc::new(AutomationQueue::default()),
         })
@@ -202,7 +202,7 @@ impl PluginMainThreadParams for GainSnapMainThread<'_> {
     }
 
     fn get_info(&mut self, param_index: u32, writer: &mut ParamInfoWriter) {
-        write_param_info(param_index, writer);
+        write_param_info(param_index, writer, self.shared.params.initial_rms_mode());
     }
 
     fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
@@ -613,21 +613,21 @@ mod tests {
 
     #[test]
     fn clap_off_event_at_nonzero_offset_freezes_gain_before_louder_audio() {
-        let source = [parameter_event(0, 1.0), parameter_event(512, 0.0)];
+        let source = [parameter_event(0, 1.0), parameter_event(2048, 0.0)];
         let input = InputEvents::from_buffer(&source);
         let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
-        collect_clap_timeline(&input, 1024, &mut timeline, classify_clap_parameter);
+        collect_clap_timeline(&input, 4096, &mut timeline, classify_clap_parameter);
         assert_eq!(
             timeline
                 .events()
                 .iter()
                 .map(|event| event.sample_offset())
                 .collect::<Vec<_>>(),
-            vec![0, 512]
+            vec![0, 2048]
         );
 
-        let mut samples = [0.25_f32; 1024];
-        samples[512..].fill(0.9);
+        let mut samples = [0.25_f32; 4096];
+        samples[2048..].fill(0.9);
         let params = peak_params();
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
         run_timeline(&mut timeline, &params, &mut engine, &samples);
@@ -639,20 +639,20 @@ mod tests {
 
     #[test]
     fn clap_on_event_at_nonzero_offset_starts_measurement_there() {
-        let source = [parameter_event(512, 1.0), parameter_event(1024, 0.0)];
+        let source = [parameter_event(512, 1.0), parameter_event(4096, 0.0)];
         let input = InputEvents::from_buffer(&source);
         let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
-        collect_clap_timeline(&input, 1024, &mut timeline, classify_clap_parameter);
+        collect_clap_timeline(&input, 4096, &mut timeline, classify_clap_parameter);
         assert_eq!(
             timeline
                 .events()
                 .iter()
                 .map(|event| event.sample_offset())
                 .collect::<Vec<_>>(),
-            vec![512, 1024]
+            vec![512, 4096]
         );
 
-        let mut samples = [0.9_f32; 1024];
+        let mut samples = [0.9_f32; 4096];
         samples[512..].fill(0.25);
         let params = peak_params();
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
@@ -668,11 +668,11 @@ mod tests {
         for _ in 0..CLAP_PARAMETER_EVENT_CAPACITY {
             source.push(parameter_event(0, 1.0));
         }
-        source.push(parameter_event(1024, 0.0));
+        source.push(parameter_event(4096, 0.0));
         let input = InputEvents::from_buffer(&source);
         let mut timeline = BlockEventTimeline::with_capacity(CLAP_PARAMETER_EVENT_CAPACITY);
         let mut overflow_final = [None; CLAP_PARAMETER_COUNT];
-        collect_clap_timeline_with_overflow(&input, 1024, &mut timeline, &mut overflow_final);
+        collect_clap_timeline_with_overflow(&input, 4096, &mut timeline, &mut overflow_final);
 
         assert_eq!(timeline.events().len(), CLAP_PARAMETER_EVENT_CAPACITY);
         assert_eq!(
@@ -682,7 +682,7 @@ mod tests {
 
         let params = peak_params();
         let mut engine = GainSnapEngine::new(1_000.0, 0.0);
-        run_timeline(&mut timeline, &params, &mut engine, &[0.25; 1024]);
+        run_timeline(&mut timeline, &params, &mut engine, &[0.25; 4096]);
         apply_clap_overflow_final(&overflow_final, &params, &mut engine);
 
         assert_eq!(engine.report().state, MatchState::Locked);

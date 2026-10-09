@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "version": "0.1.8",
+  "source_head": "5c37734228305c46c2cb57d78a59f76c7e113540",
+  "base_tag": "v0.1.7",
+  "base_commit": "e98f7f787175a75e8813a9e69bdf63a43c85c8e2",
+  "entries": [
+    {
+      "category": "improvement",
+      "description": "Simplified the interface by removing the duplicate Applied dB and adjustment-status readout.",
+      "commits": [
+        "5c37734228305c46c2cb57d78a59f76c7e113540"
+      ]
+    }
+  ]
+}

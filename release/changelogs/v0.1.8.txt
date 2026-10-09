@@ -1,0 +1,4 @@
+GainSnap v0.1.8
+
+Improvements
+- Simplified the interface by removing the duplicate Applied dB and adjustment-status readout.
